@@ -17,7 +17,7 @@ BRANCH=airbridge/tlv-only
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y git curl ca-certificates build-essential pkg-config python3 iw rfkill
+apt-get install -y git curl ca-certificates build-essential pkg-config python3 iw rfkill dnsmasq-base
 
 # Install Rust only when cargo is absent.
 if ! command -v cargo >/dev/null 2>&1; then
@@ -49,6 +49,7 @@ cargo build --release --manifest-path "$PREFIX/opendrop-rs/Cargo.toml"
 install -m 0755 "$PREFIX/opendrop-rs/target/release/filin" "$PREFIX/bin/filin"
 install -m 0755 "$PREFIX/opendrop-rs/target/release/luftlift" "$PREFIX/bin/luftlift"
 
+install -m 0755 "$REPO_ROOT/scripts/usb-gadget.sh" "$PREFIX/bin/usb-gadget.sh"
 install -m 0755 "$REPO_ROOT/scripts/usb-network.sh" "$PREFIX/bin/usb-network.sh"
 install -m 0755 "$REPO_ROOT/scripts/preflight.sh" "$PREFIX/bin/preflight.sh"
 install -m 0755 "$REPO_ROOT/scripts/status.sh" "$PREFIX/bin/status.sh"
@@ -72,12 +73,22 @@ for unit in airbridge-awdl airbridge-receiver; do
   install -m 0644 "$REPO_ROOT/systemd/$unit.service.d/"*.conf "/etc/systemd/system/$unit.service.d/"
 done
 
-# Raspberry Pi OS Trixie provides this package; installation is best-effort
-# because the image may already contain it or use another gadget setup.
-apt-get install -y rpi-usb-gadget 2>/dev/null || true
+# USB gadget: the board's OTG port (Pi 4: USB-C) in device mode. airbridge-usb
+# creates the RNDIS gadget itself and serves DHCP on usb0, so NetworkManager
+# is told to leave usb0 alone (rpi-usb-gadget's ICS profiles are not used).
+BOOTCFG=/boot/firmware/config.txt
+[[ -f "$BOOTCFG" ]] || BOOTCFG=/boot/config.txt
+if ! grep -q '^# AirBridge USB gadget' "$BOOTCFG"; then
+  printf '\n# AirBridge USB gadget\n[all]\ndtoverlay=dwc2,dr_mode=peripheral\n' >>"$BOOTCFG"
+  echo "Added dwc2 peripheral overlay to $BOOTCFG (reboot required)"
+fi
+install -d /etc/NetworkManager/conf.d
+install -m 0644 "$REPO_ROOT/config/networkmanager-airbridge-usb.conf" \
+  /etc/NetworkManager/conf.d/90-airbridge-usb.conf
 
 systemctl daemon-reload
-systemctl enable airbridge-radio.service airbridge-awdl.service airbridge-receiver.service
+systemctl enable airbridge-radio.service airbridge-awdl.service airbridge-receiver.service \
+  airbridge-usb.service airbridge-web.service
 
 echo
 printf '%s\n' 'AirBridge installed.'

@@ -3,6 +3,7 @@ import html
 import mimetypes
 import os
 import pathlib
+import socket
 import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -64,7 +65,7 @@ class Handler(BaseHTTPRequestHandler):
             st=p.stat(); q=urllib.parse.quote(p.name)
             rows.append(f'<div class="card"><div class="name"><a href="/files/{q}">{html.escape(p.name)}</a></div><div class="meta">{human_size(st.st_size)}</div></div>')
         if not rows: rows=['<div class="empty">No AirDrop files received yet.</div>']
-        body=f'''<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>AirBridge</title><style>{CSS}</style><h1>AirBridge</h1><p class="sub">AirDrop inbox <span class="pill">{len(files)} files</span></p>{''.join(rows)}'''
+        body=f'''<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>AirBridge</title><style>{CSS}</style><h1>AirBridge</h1><p class="sub">AirDrop inbox <span class="pill">{len(files)} files</span></p>{''.join(rows)}'''
         data=body.encode()
         self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Content-Length",str(len(data))); self.end_headers(); self.wfile.write(data)
 
@@ -90,6 +91,12 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt%args))
 
+class Server(ThreadingHTTPServer):
+    # Bind WEB_BIND even before airbridge-usb has put it on usb0.
+    def server_bind(self):
+        self.socket.setsockopt(socket.SOL_IP, getattr(socket, "IP_FREEBIND", 15), 1)
+        super().server_bind()
+
 if __name__ == "__main__":
     print(f"AirBridge web: http://{BIND}:{PORT}/ ; root={ROOT}")
-    ThreadingHTTPServer((BIND,PORT),Handler).serve_forever()
+    Server((BIND,PORT),Handler).serve_forever()

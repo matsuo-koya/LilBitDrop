@@ -379,3 +379,18 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
 - filin の環境に `FILIN_OWN_SEQUENCE=1` が入っており、起動直後に予定表 `[44×8, 6, 44×7]` を使用（drop-in `20-own-sequence.conf` が有効）。
 - 起動から約11秒で最初の Discover（13:04:55）。その後も 13:07–13:12 に Discover が続いた。
 - 13:14:20 に写真送信: Ask → Upload 完了まで **約6.2秒**（`IMG_1576.jpg`、2.85 MB）。13:03 の 2.2 秒より遅いが成功。
+
+## Gate F: USB gadget + Web UI (13:20–)
+
+- 前提: Pi 4 の USB-C（dwc2）は既定でホストモード、`usb0` なし、`airbridge-usb/web` は disabled。
+  元の `usb-network.sh` はアドレスを付けるだけで DHCP がなく、PC は 10.55.0.1 に届かなかった。
+- 接続先は Windows、電源は PC の USB-C から（ユーザー回答）。
+- `scripts/usb-gadget.sh`: configfs で RNDIS gadget（MS OS 記述子 `RNDIS`/`5162001`。Windows が標準ドライバを自動で当てる）。
+  MAC はボードのシリアルから決める（Pi 側 `02:41:…`、PC 側 `02:42:…`）ので、Windows 側でアダプタが毎回増えない。
+- `usb-network.sh`: `usb0` に 10.55.0.1/24 → dnsmasq で DHCP `10.55.0.10–50`。**ゲートウェイと DNS は配らない**ので、PC のインターネット接続に影響しない。
+  NetworkManager には `conf.d/90-airbridge-usb.conf` で `usb0` を管理させない（rpi-usb-gadget の ICS は使わない）。
+- `server.py`: `IP_FREEBIND` で `usb0` のアドレスが付く前でも 10.55.0.1 で待ち受けられる。一覧は5秒ごとに自動更新。
+- config.txt に `[all] dtoverlay=dwc2,dr_mode=peripheral` を追記（バックアップ `config.txt.pre-gadget`）。
+- 再起動なしでの確認（`dtoverlay dwc2 dr_mode=peripheral` を実行時に適用）: gadget が `fe980000.usb` に結び付き、`usb0` に 10.55.0.1、
+  dnsmasq 起動、`curl http://10.55.0.1:8080/` で4ファイル表示、`IMG_1576.jpg` を 200 で 2,849,828 B 取得。`throttled=0x0`。
+- 未確認: Windows PC 側の認識、DHCP、ブラウザでの取得、PC 給電での電圧。

@@ -161,6 +161,13 @@ systemctl status airbridge-usb
 
 Pi 4/5 gadget mode uses the board USB-C port. Power/data topology matters; a weak host port can cause resets.
 
+`airbridge-usb` creates an RNDIS gadget (with Microsoft OS descriptors, so Windows 10/11 binds its inbox driver) and hands the PC an address in `10.55.0.10–50` by DHCP. No gateway or DNS is offered, so the PC keeps its own Internet connection. Linux hosts work via `rndis_host`; macOS has no RNDIS driver and is not supported in v0.1.
+
+```bash
+systemctl status airbridge-usb
+cat /run/airbridge-usb.leases
+```
+
 ## Security model
 
 v0.1 is intentionally simple:
