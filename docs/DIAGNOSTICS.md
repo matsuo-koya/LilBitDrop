@@ -134,7 +134,30 @@ filin は ch44/48/6/11 をホップ。**ch149 への切替は毎回 `Io(22)` (EI
 - JP の電波法上 W52 (ch36–48) は屋内で送信可・DFS 不要。W53 (52–64) は DFS 必須なので NO_IR のままで正しい。
   → 正しい修正は「phy3 に JP ルールを正しく反映させる」こと。規制回避ではない。
 
-### 次の検証（要確認・未実施）
+### 修正の実施結果 (09:35〜09:40)
+
+1. `sudo iw reg set JP` → phy3 の ch36–48 は **no IR のまま**（変化なし）。
+2. サービス停止 → `modprobe -r carl9170 && modprobe carl9170` → wlan1 は **phy4** として再登録、
+   ch36/40/44/48 から **no IR が消えた**。ch52 以降は `no IR, radar detection` のまま（正しい）、ch149 disabled。
+   wlan0 の接続は維持（アドレス変化なし）。
+3. サービス再起動後、同じ kprobe 計測（20秒）:
+
+| freq | check | 件数 | ドライバ到達 |
+|---|---|---|---|
+| 2437 (ch6) | true | 83 | 83 |
+| 5220 (ch44) | true | 24 | 24 |
+| 5240 (ch48) | true | 89 | 89 |
+
+→ **5GHz の注入フレームが初めてドライバまで届くようになった。**
+
+修正後1分間（iPhone 操作なし）: `synced=true`, alignment 51–53%, peer 3–5, `master_changes` 14→36（約3秒に1回切替）,
+`mdns_rx_other=0`, awdl0 RX=0, luftlift 全カウンター 0。周囲の端末が AirDrop を開いていない状態なので、受信0は想定内。
+
+未解決: なぜ最初の probe 時に NO_IR が残ったかは未特定。**再起動後に再発するかは未検証**。
+再発防止として `filin-guard.sh` に「AWDL チャンネルが no IR / disabled なら起動拒否」チェックを追加・インストール済み
+（ch44 で exit 0、ch52 指定で exit 1 を確認）。
+
+### 当初の検証計画（参考）
 
 1. `sudo iw reg set JP`（同一 alpha2 の再ヒント）で phy3 のフラグが変わるか。
 2. サービス停止 → carl9170 の USB unbind/bind（または `modprobe -r carl9170 && modprobe carl9170`）で
