@@ -11,6 +11,9 @@ PREFIX=/opt/airbridge
 CONF=/etc/airbridge.conf
 DATA=/var/lib/airbridge/incoming
 UPSTREAM=https://github.com/ayourtch-llm/opendrop-rs.git
+# Upstream commit the AirBridge patches (patches/*.patch) were made against.
+UPSTREAM_BASE=dccc798
+BRANCH=airbridge/tlv-only
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
@@ -30,8 +33,16 @@ mkdir -p "$PREFIX" "$PREFIX/bin" "$DATA"
 
 if [[ ! -d "$PREFIX/opendrop-rs/.git" ]]; then
   git clone "$UPSTREAM" "$PREFIX/opendrop-rs"
+fi
+# Build upstream + the AirBridge patches (iOS 27 discovery TLVs, data-plane
+# grace, pinned-transfer ACK gating, dvzip stored blocks / trailer end). An
+# existing $BRANCH is left as is so local work is never overwritten.
+if ! git -C "$PREFIX/opendrop-rs" rev-parse --verify -q "$BRANCH" >/dev/null; then
+  git -C "$PREFIX/opendrop-rs" checkout -b "$BRANCH" "$UPSTREAM_BASE"
+  git -C "$PREFIX/opendrop-rs" -c user.name=airbridge -c user.email=airbridge@localhost \
+    am "$REPO_ROOT"/patches/*.patch
 else
-  git -C "$PREFIX/opendrop-rs" pull --ff-only || true
+  git -C "$PREFIX/opendrop-rs" checkout "$BRANCH"
 fi
 
 cargo build --release --manifest-path "$PREFIX/opendrop-rs/Cargo.toml"
@@ -41,6 +52,8 @@ install -m 0755 "$PREFIX/opendrop-rs/target/release/luftlift" "$PREFIX/bin/luftl
 install -m 0755 "$REPO_ROOT/scripts/usb-network.sh" "$PREFIX/bin/usb-network.sh"
 install -m 0755 "$REPO_ROOT/scripts/preflight.sh" "$PREFIX/bin/preflight.sh"
 install -m 0755 "$REPO_ROOT/scripts/status.sh" "$PREFIX/bin/status.sh"
+install -m 0755 "$REPO_ROOT/scripts/filin-guard.sh" "$PREFIX/bin/filin-guard.sh"
+install -m 0755 "$REPO_ROOT/scripts/radio-setup.sh" "$PREFIX/bin/radio-setup.sh"
 install -m 0755 "$REPO_ROOT/web/server.py" "$PREFIX/bin/airbridge-web.py"
 
 if [[ ! -f "$CONF" ]]; then
@@ -53,15 +66,21 @@ install -m 0644 "$REPO_ROOT/systemd/airbridge-usb.service" /etc/systemd/system/
 install -m 0644 "$REPO_ROOT/systemd/airbridge-awdl.service" /etc/systemd/system/
 install -m 0644 "$REPO_ROOT/systemd/airbridge-receiver.service" /etc/systemd/system/
 install -m 0644 "$REPO_ROOT/systemd/airbridge-web.service" /etc/systemd/system/
+install -m 0644 "$REPO_ROOT/systemd/airbridge-radio.service" /etc/systemd/system/
+for unit in airbridge-awdl airbridge-receiver; do
+  install -d "/etc/systemd/system/$unit.service.d"
+  install -m 0644 "$REPO_ROOT/systemd/$unit.service.d/"*.conf "/etc/systemd/system/$unit.service.d/"
+done
 
 # Raspberry Pi OS Trixie provides this package; installation is best-effort
 # because the image may already contain it or use another gadget setup.
 apt-get install -y rpi-usb-gadget 2>/dev/null || true
 
 systemctl daemon-reload
+systemctl enable airbridge-radio.service airbridge-awdl.service airbridge-receiver.service
 
 echo
 printf '%s\n' 'AirBridge installed.'
 printf '%s\n' "1) Edit $CONF and set WIFI_IFACE to the external AR9170 adapter."
 printf '%s\n' '2) Run: sudo /opt/airbridge/bin/preflight.sh'
-printf '%s\n' '3) Enable services as documented in README.md'
+printf '%s\n' '3) Reboot, or: sudo systemctl start airbridge-receiver.service'

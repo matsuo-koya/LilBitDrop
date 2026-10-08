@@ -1,0 +1,49 @@
+From 114bad1fd8a8af8b2db6ca89a70ea904320d68c1 Mon Sep 17 00:00:00 2001
+From: koya <235002527+matsuo-koya@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 11:32:29 +0900
+Subject: [PATCH 5/8] filin: during a transfer pin, gate unicast to the pinned
+ peer on the actual radio channel
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/filin-rs/src/lib.rs | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/crates/filin-rs/src/lib.rs b/crates/filin-rs/src/lib.rs
+index 555ec8e..fdf8c4b 100644
+--- a/crates/filin-rs/src/lib.rs
++++ b/crates/filin-rs/src/lib.rs
+@@ -6753,10 +6753,29 @@ pub mod runtime {
+         frame: &PendingFrame,
+         tx_retransmits: u32,
+     ) -> TxOutcome {
++        // AirBridge: while the transfer pin holds the radio on the pinned
++        // peer's channel, gate unicast to THAT peer on the radio's actual
++        // channel instead of our adopted sequence slot. The adopted sequence
++        // rarely matched the iPhone's channel, so TCP ACKs waited ~0.4 s per
++        // burst and a 5 MB upload crawled at ~150 KB/s until iOS aborted.
++        // Scoped to the pinned peer only: applying it to all unicast
++        // (e7a8229) stopped iPhone/Mac discovering us at all.
++        let mut own_seq = awdl_state.channel_sequence;
++        if let Some((peer, chan)) = crate::schedule::transfer_active(
++            awdl_state.transfer.as_ref(),
++            now_us,
++            crate::schedule::TRANSFER_IDLE_TIMEOUT_US,
++        ) {
++            if peer == frame.dst && chan == awdl_state.current_channel {
++                for slot in own_seq.iter_mut() {
++                    slot[0] = chan;
++                }
++            }
++        }
+         let decision = crate::schedule::data_send_decision(
+             &frame.dst,
+             awdl_state.current_channel,
+-            &awdl_state.channel_sequence,
++            &own_seq,
+             &awdl_state.peers,
+             &awdl_state.sync,
+             now_us,
+-- 
+2.47.3
+

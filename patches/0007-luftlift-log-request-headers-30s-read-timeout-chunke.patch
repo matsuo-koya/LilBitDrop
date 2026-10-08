@@ -1,0 +1,86 @@
+From 6aca12283217e9eb4637014cd8489923187e85e0 Mon Sep 17 00:00:00 2001
+From: koya <235002527+matsuo-koya@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 11:51:08 +0900
+Subject: [PATCH 7/8] luftlift: log request headers, 30s read timeout,
+ chunked-read progress on failure
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/luftlift-rs/src/server.rs | 37 +++++++++++++++++++++++++++++++-
+ 1 file changed, 36 insertions(+), 1 deletion(-)
+
+diff --git a/crates/luftlift-rs/src/server.rs b/crates/luftlift-rs/src/server.rs
+index 4a45356..cf58273 100644
+--- a/crates/luftlift-rs/src/server.rs
++++ b/crates/luftlift-rs/src/server.rs
+@@ -198,6 +198,9 @@ fn handle_tls_connection(
+     introspect: Arc<IntrospectState>,
+ ) -> Result<()> {
+     let conn = rustls::ServerConnection::new(tls_config)?;
++    // AirBridge: never block forever on a half-read request; a stalled
++    // read surfaces as an error with the body progress logged below.
++    tcp_stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
+     let mut tls = rustls::StreamOwned::new(conn, tcp_stream);
+     // Read headers, then body. The split lets us emit an interim
+     // `HTTP/1.1 100 Continue` between them when the client sent
+@@ -217,6 +220,14 @@ fn handle_tls_connection(
+             Err(e) => return Err(e),
+         };
+         let head_str = std::str::from_utf8(&header_bytes).unwrap_or("");
++        info!(
++            request = head_str.lines().next().unwrap_or(""),
++            content_length = parse_header_value(head_str, "content-length").as_deref().unwrap_or("-"),
++            transfer_encoding = parse_header_value(head_str, "transfer-encoding").as_deref().unwrap_or("-"),
++            content_type = parse_header_value(head_str, "content-type").as_deref().unwrap_or("-"),
++            expect = parse_header_value(head_str, "expect").as_deref().unwrap_or("-"),
++            "request headers"
++        );
+         if let Some(expect) = parse_header_value(head_str, "expect") {
+             if expect.eq_ignore_ascii_case("100-continue") {
+                 reader.get_mut().write_all(b"HTTP/1.1 100 Continue\r\n\r\n")?;
+@@ -340,9 +351,33 @@ fn parse_header_value(headers: &str, name: &str) -> Option<String> {
+ /// upload.
+ fn read_chunked_stream(reader: &mut impl BufRead) -> Result<Vec<u8>> {
+     let mut raw = Vec::new();
++    let mut chunks = 0usize;
++    let mut last_size_line = String::new();
++    let result = read_chunked_stream_into(reader, &mut raw, &mut chunks, &mut last_size_line);
++    if let Err(e) = &result {
++        warn!(
++            error = %e,
++            chunks,
++            raw_bytes = raw.len(),
++            last_size_line = %last_size_line.trim(),
++            tail_hex = %raw[raw.len().saturating_sub(16)..].iter().map(|b| format!("{b:02x}")).collect::<String>(),
++            "chunked body read failed"
++        );
++    }
++    result.map(|_| raw)
++}
++
++fn read_chunked_stream_into(
++    reader: &mut impl BufRead,
++    raw: &mut Vec<u8>,
++    chunks: &mut usize,
++    last_size_line: &mut String,
++) -> Result<()> {
+     loop {
+         let mut size_line = String::new();
+         let n = reader.read_line(&mut size_line)?;
++        *chunks += 1;
++        last_size_line.clone_from(&size_line);
+         if n == 0 {
+             anyhow::bail!("chunked body: EOF before last-chunk (truncated)");
+         }
+@@ -379,7 +414,7 @@ fn read_chunked_stream(reader: &mut impl BufRead) -> Result<Vec<u8>> {
+         reader.read_exact(&mut crlf)?;
+         raw.extend_from_slice(&crlf);
+     }
+-    Ok(raw)
++    Ok(())
+ }
+ 
+ // ---- raw /Upload body capture (LUFTLIFT_DUMP_UPLOAD) ----
+-- 
+2.47.3
+

@@ -312,3 +312,18 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
 - 再起動耐性: carl9170 の NO_IR（要ドライバ再読込）、サービス disabled。
 - `upload-dumps`（写真・送信者証明書を含む）の drop-in 撤去とファイル削除。
 - Gate F（USB gadget + Web UI）、Gate G（連続転送・再起動）。
+
+## 後片付けと再起動対策 (12:05–12:20)
+
+- `20-dump-upload.conf` を撤去（`systemd/optional/` へ移動）、`/var/lib/airbridge/upload-dumps` と作業コピーを削除。
+- `airbridge-radio.service`（oneshot, `scripts/radio-setup.sh`）: 起動時に AWDL チャンネルが送信可能か確認し、
+  `no IR` ならドライバ再読込を **1 回だけ** 行う。awdl drop-in に `Wants=/After=airbridge-radio.service`。
+- **事故記録**: 再読込経路を ch52（常に no IR）で試験し、約 90 秒で 3 回連続 `modprobe -r/modprobe` したところ
+  WL300NU-AG が USB 再列挙に失敗（`error -71/-110`, `unable to enumerate USB device`）。hub 1-1 の
+  `authorized` 0→1 では復旧せず、物理的な抜き差しで復旧。→ 再読込は1回に制限。
+- 抜き差し後の phy7 は最初から ch36–48 が送信可能（no IR なし）。朝の状態との差は未解明。
+- `airbridge-radio/awdl/receiver` を **enable**（usb/web は未）。起動順 radio → awdl → receiver を確認。
+- `patches/0001-0008`: `/opt/airbridge/opendrop-rs` の `airbridge/tlv-only`（upstream `dccc798` 起点）を
+  format-patch。`git archive` + `git am` で適用するとブランチと完全一致することを確認。
+  `install.sh` は `dccc798` から `airbridge/tlv-only` を作ってパッチを適用し、新スクリプト・unit・drop-in を入れて enable する。
+- **未検証: 実機の再起動**（Claude Code が Pi 上で動いているため、再起動はユーザーのタイミングで行う）。

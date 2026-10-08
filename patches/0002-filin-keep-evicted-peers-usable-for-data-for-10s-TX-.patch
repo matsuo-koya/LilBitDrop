@@ -1,0 +1,156 @@
+From c7fb6c18244a273575970e8c2d9fe26092155d49 Mon Sep 17 00:00:00 2001
+From: koya <235002527+matsuo-koya@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 11:01:37 +0900
+Subject: [PATCH 2/8] filin: keep evicted peers usable for data for 10s (TX
+ gate, RX accept, neighbor entry)
+
+Election/sync keep owl's 2s table. Fixes stalled /Upload while the iPhone is
+evicted every few seconds during channel hopping.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/filin-rs/src/lib.rs | 76 ++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 72 insertions(+), 4 deletions(-)
+
+diff --git a/crates/filin-rs/src/lib.rs b/crates/filin-rs/src/lib.rs
+index cd4d8d1..555ec8e 100644
+--- a/crates/filin-rs/src/lib.rs
++++ b/crates/filin-rs/src/lib.rs
+@@ -1930,7 +1930,7 @@ pub mod schedule {
+             DataSendDecision::Send
+         } else {
+             // owl awdl_send_unicast (core.c:222-223): per-peer gate.
+-            let Some(peer) = peers.get(dst) else {
++            let Some(peer) = peers.get_for_data(dst, now_us) else {
+                 // owl awdl_send_unicast frees a non-peer frame. Drop, don't
+                 // hold — a held non-peer frame would block the TAP forever.
+                 return DataSendDecision::Drop;
+@@ -3365,6 +3365,16 @@ pub mod peers {
+     /// dropped.
+     pub const PEER_TIMEOUT_US: u64 = 2_000_000;
+ 
++    /// AirBridge: how long an evicted peer stays usable for *data* (unicast TX
++    /// gate, RX acceptance, kernel neighbor entry). Hopping over several
++    /// channels, filin often misses an iPhone's action frames for > 2 s, so
++    /// owl's timeout evicted it every few seconds mid-upload and the TCP
++    /// session stalled (TX "Drop", RX "drop data frame from non-peer").
++    /// Election and sync still use only the live table above: raising
++    /// PEER_TIMEOUT_US itself kept departed masters around and the iPhone no
++    /// longer discovered us (2026-10-08 A/B).
++    pub const DATA_PEER_GRACE_US: u64 = 10_000_000;
++
+     /// owl `struct awdl_peer` (owl/src/peers.h:38-52).
+     #[derive(Debug, Clone)]
+     pub struct Peer {
+@@ -3431,6 +3441,9 @@ pub mod peers {
+     #[derive(Debug, Default)]
+     pub struct PeerTable {
+         peers: Vec<Peer>,
++        /// Recently evicted peers, kept for [`DATA_PEER_GRACE_US`] for the
++        /// data plane only (see [`PeerTable::get_for_data`]).
++        departed: Vec<Peer>,
+     }
+ 
+     impl PeerTable {
+@@ -3490,16 +3503,51 @@ pub mod peers {
+         /// addresses (owl invokes `peer_remove_cb` for each).
+         pub fn remove_stale(&mut self, cutoff_us: u64) -> Vec<[u8; 6]> {
+             let mut removed = Vec::new();
++            let mut evicted = Vec::new();
+             self.peers.retain(|p| {
+                 if p.last_update_us < cutoff_us {
+                     removed.push(p.addr);
++                    evicted.push(p.clone());
+                     false
+                 } else {
+                     true
+                 }
+             });
++            // cutoff = now - PEER_TIMEOUT_US; forget departed peers unheard
++            // for longer than the data grace.
++            let data_cutoff = (cutoff_us + PEER_TIMEOUT_US).saturating_sub(DATA_PEER_GRACE_US);
++            let live = &self.peers;
++            self.departed.retain(|d| {
++                d.last_update_us >= data_cutoff
++                    && !live.iter().any(|p| p.addr == d.addr)
++                    && !evicted.iter().any(|e| e.addr == d.addr)
++            });
++            self.departed.extend(evicted);
+             removed
+         }
++
++        /// Peer lookup for the data plane: a live peer, or one evicted less
++        /// than [`DATA_PEER_GRACE_US`] ago (its last known channel sequence
++        /// still gates unicast TX).
++        pub fn get_for_data(&self, addr: &[u8; 6], now_us: u64) -> Option<&Peer> {
++            self.get(addr).or_else(|| {
++                self.departed.iter().find(|p| {
++                    p.addr == *addr && now_us.saturating_sub(p.last_update_us) <= DATA_PEER_GRACE_US
++                })
++            })
++        }
++
++        /// MACs usable for data now: live peers plus departed ones in grace.
++        /// Kernel neighbor entries are kept for exactly these.
++        pub fn data_macs(&self, now_us: u64) -> Vec<[u8; 6]> {
++            let mut macs: Vec<[u8; 6]> = self.peers.iter().map(|p| p.addr).collect();
++            for d in &self.departed {
++                if now_us.saturating_sub(d.last_update_us) <= DATA_PEER_GRACE_US && !macs.contains(&d.addr) {
++                    macs.push(d.addr);
++                }
++            }
++            macs
++        }
+     }
+ 
+     #[cfg(test)]
+@@ -3552,6 +3600,27 @@ pub mod peers {
+             assert!(table.get(&recent).is_some());
+         }
+ 
++        #[test]
++        fn evicted_peer_stays_usable_for_data_within_grace() {
++            let mut table = PeerTable::new();
++            let phone = [0x92, 0xa5, 0xbd, 0x14, 0x74, 0x71];
++            table.touch(phone, 1_000_000);
++            // Evicted from the live table 3 s later (election no longer sees it)...
++            let now = 4_000_000;
++            assert_eq!(table.remove_stale(now - PEER_TIMEOUT_US), vec![phone]);
++            assert!(table.get(&phone).is_none());
++            assert!(table.election_views().is_empty());
++            // ...but data still flows, and its neighbor entry is kept.
++            assert!(table.get_for_data(&phone, now).is_some());
++            assert_eq!(table.data_macs(now), vec![phone]);
++            // Past the grace it is gone for data too, and pruned on the next clean.
++            let later = 1_000_000 + DATA_PEER_GRACE_US + 1;
++            assert!(table.get_for_data(&phone, later).is_none());
++            assert!(table.data_macs(later).is_empty());
++            table.remove_stale(later - PEER_TIMEOUT_US);
++            assert!(table.departed.is_empty());
++        }
++
+         #[test]
+         fn election_views_carry_validity_and_addrs() {
+             let mut table = PeerTable::new();
+@@ -6242,8 +6311,7 @@ pub mod runtime {
+                 // FILIN_NEIGHBOR_TABLE.md: evict neighbor entries for peers
+                 // no longer in the table. `removed` is the MACs dropped this
+                 // cycle; live_macs is everyone still present.
+-                let live_macs: Vec<[u8; 6]> =
+-                    awdl_state.peers.iter().map(|p| p.addr).collect();
++                let live_macs: Vec<[u8; 6]> = awdl_state.peers.data_macs(now_us);
+                 for change in neighbor_table.evict_stale(&live_macs) {
+                     if let crate::state::NeighborChange::Remove(mac, ipv6) = change {
+                         if let Err(err) = os::rtnl::remove_neighbor(&host_iface, ipv6) {
+@@ -6434,7 +6502,7 @@ pub mod runtime {
+                             }
+                             Err(err) => match decapsulate_rx_data(&wlan_buf[..len]) {
+                                 Ok((source, frames)) => {
+-                                    if awdl_state.peers.get(&source).is_none() {
++                                    if awdl_state.peers.get_for_data(&source, now_us).is_none() {
+                                         tracing::trace!(
+                                             ?source,
+                                             "drop data frame from non-peer"
+-- 
+2.47.3
+

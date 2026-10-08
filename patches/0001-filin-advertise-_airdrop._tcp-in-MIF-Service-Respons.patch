@@ -1,0 +1,478 @@
+From fbb798fa6bf658d5813aafa5b992b744acf64887 Mon Sep 17 00:00:00 2001
+From: koya <235002527+matsuo-koya@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 10:31:46 +0900
+Subject: [PATCH 1/8] filin: advertise _airdrop._tcp in MIF Service Response
+ TLVs + service bloom
+
+iOS 27 senders browse AirDrop receivers from AWDL Service Response TLVs and
+send no mDNS on awdl0. Parse luftlift's own mDNS announce from the TAP and
+re-emit PTR/SRV/TXT as type-2 TLVs (byte-identical layout to macOS receivers)
+with bloom bits 158/183 in the Service Parameters TLV.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/filin-rs/src/lib.rs     |  62 +++++-
+ crates/filin-rs/src/svcdisc.rs | 333 +++++++++++++++++++++++++++++++++
+ 2 files changed, 390 insertions(+), 5 deletions(-)
+ create mode 100644 crates/filin-rs/src/svcdisc.rs
+
+diff --git a/crates/filin-rs/src/lib.rs b/crates/filin-rs/src/lib.rs
+index 7e21d1f..cd4d8d1 100644
+--- a/crates/filin-rs/src/lib.rs
++++ b/crates/filin-rs/src/lib.rs
+@@ -4455,6 +4455,13 @@ pub mod state {
+         /// park mode — `desired_channel` returns this channel for every EAW
+         /// slot and `update_channel` never hops. Set via [`enable_park`].
+         park_channel: Option<u8>,
++        /// AirBridge: our `_airdrop._tcp` service, parsed from luftlift's
++        /// mDNS announce on the TAP, advertised in MIF Service Response TLVs.
++        pub airdrop_service: Option<crate::svcdisc::AirdropService>,
++        /// Host time of the last announce that refreshed [`airdrop_service`].
++        pub airdrop_service_at_us: u64,
++        /// Service Update Indicator carried in the Service Parameters TLV.
++        pub service_sui: u16,
+     }
+ 
+     impl AwdlState {
+@@ -4488,6 +4495,9 @@ pub mod state {
+                 last_seen_master_addr: self_addr,
+                 last_seen_sync_addr: self_addr,
+                 park_channel: None,
++                airdrop_service: None,
++                airdrop_service_at_us: 0,
++                service_sui: 0,
+             }
+         }
+ 
+@@ -4707,6 +4717,31 @@ pub mod state {
+             self.channel_sequence[slot][0]
+         }
+ 
++        /// Record what our own mDNS announce says about `_airdrop._tcp`
++        /// (`None` on goodbye). Bumps the Service Update Indicator when the
++        /// advertised service changes so peers refresh their cached records.
++        pub fn set_airdrop_service(
++            &mut self,
++            svc: Option<crate::svcdisc::AirdropService>,
++            now_us: u64,
++        ) {
++            if svc != self.airdrop_service {
++                self.service_sui = self.service_sui.wrapping_add(1);
++                tracing::info!(service = ?svc, sui = self.service_sui, "AWDL service advert updated");
++                self.airdrop_service = svc;
++            }
++            self.airdrop_service_at_us = now_us;
++        }
++
++        /// The advertised `_airdrop._tcp` service, unless luftlift has not
++        /// refreshed it within the announce-cache TTL (dead receiver).
++        pub fn live_airdrop_service(&self, now_us: u64) -> Option<&crate::svcdisc::AirdropService> {
++            self.airdrop_service.as_ref().filter(|_| {
++                now_us.saturating_sub(self.airdrop_service_at_us)
++                    <= crate::schedule::ANNOUNCE_CACHE_TTL_US
++            })
++        }
++
+         /// Enable single-channel park mode on `channel`. Subsequent calls to
+         /// [`desired_channel`] / [`update_channel`] stay fixed on it; only a
+         /// different `enable_park` call (or the runtime updating the park
+@@ -6505,6 +6540,15 @@ pub mod runtime {
+                         matches!(classify_mdns(&tap_buf[..len], links.self_addr), Some(true));
+                     if is_self_mdns {
+                         introspect.counters.inc_mdns_rx_self();
++                        match crate::svcdisc::parse_airdrop_announce(&tap_buf[..len]) {
++                            Some(crate::svcdisc::Announce::Service(svc)) => {
++                                awdl_state.set_airdrop_service(Some(svc), host_time_us())
++                            }
++                            Some(crate::svcdisc::Announce::Goodbye) => {
++                                awdl_state.set_airdrop_service(None, host_time_us())
++                            }
++                            None => {}
++                        }
+                     }
+                     match awdl::encapsulate_ethernet_payload(&tap_buf[..len], awdl_state.tx_seq) {
+                         Ok(body) => {
+@@ -6949,10 +6993,20 @@ pub mod runtime {
+             24,
+             &build_election_parameters_v2_tlv_value(&awdl_state.election),
+         );
+-        push_tlv(&mut tlvs, 6, &build_service_parameters_tlv_value());
++        let airdrop = awdl_state.live_airdrop_service(now_us);
++        push_tlv(
++            &mut tlvs,
++            6,
++            &crate::svcdisc::build_service_parameters_value(awdl_state.service_sui, airdrop.is_some()),
++        );
+         if subtype == awdl::ActionSubtype::Mif {
+             push_tlv(&mut tlvs, 7, &build_ht_capabilities_tlv_value());
+             push_tlv(&mut tlvs, 16, &build_arpa_tlv_value(&awdl_state.name));
++            if let Some(svc) = airdrop {
++                for value in crate::svcdisc::build_service_response_values(svc, &awdl_state.name) {
++                    push_tlv(&mut tlvs, crate::svcdisc::SERVICE_RESPONSE_TLV, &value);
++                }
++            }
+         }
+         push_tlv(
+             &mut tlvs,
+@@ -7065,10 +7119,6 @@ pub mod runtime {
+         value
+     }
+ 
+-    fn build_service_parameters_tlv_value() -> [u8; 9] {
+-        [0; 9]
+-    }
+-
+     fn build_ht_capabilities_tlv_value() -> [u8; 8] {
+         [0x00, 0x00, 0xce, 0x11, 0x1b, 0xff, 0x00, 0x00]
+     }
+@@ -9003,6 +9053,8 @@ pub mod os {
+     }
+ }
+ 
++pub mod svcdisc;
++
+ pub mod introspect {
+     //! Localhost HTTP/JSON introspection API (see FILIN_HTTP_INTROSPECT.md).
+     //!
+diff --git a/crates/filin-rs/src/svcdisc.rs b/crates/filin-rs/src/svcdisc.rs
+new file mode 100644
+index 0000000..a6f15c7
+--- /dev/null
++++ b/crates/filin-rs/src/svcdisc.rs
+@@ -0,0 +1,333 @@
++//! AWDL service-discovery offload for the AirDrop receiver (AirBridge).
++//!
++//! Apple devices fold Bonjour PTR/SRV/TXT records into their MIFs as
++//! **Service Response TLVs (type 2)** and advertise which services they carry
++//! in the **Service Parameters TLV (type 6)** bloom. Observed 2026-10-08: an
++//! iOS 27.2 sender with the AirDrop sheet open sends *no* mDNS on awdl0 at
++//! all, while every nearby macOS AirDrop receiver advertises `_airdrop._tcp`
++//! this way. filin used to send only an empty Service Parameters TLV, so the
++//! iPhone found us only when a multicast mDNS announce happened to land in its
++//! listen window (minutes, or never).
++//!
++//! This module turns our own mDNS announce (read from the awdl0 TAP, as sent
++//! by luftlift) into the equivalent TLVs, so luftlift stays the single source
++//! of truth for the instance name, port and TXT.
++//!
++//! TLV value layout (decoded with Wireshark's AWDL dissector and matched
++//! byte-for-byte against a Mac mini M4 capture, see tests):
++//!
++//! ```text
++//! u16 LE  name_len   encoded name length + 1 (the type byte)
++//! name               DNS labels ending in a 2-byte AWDL compression code
++//! u8      type       12 PTR / 33 SRV / 16 TXT
++//! u16 LE  data_len   rdata length
++//! u16     0          unknown, always 0
++//! rdata              PTR: labels + 0xc000; SRV: prio, weight, port (BE),
++//!                    target labels + 0xc00c; TXT: length-prefixed strings
++//! ```
++
++/// Service Response TLV type.
++pub const SERVICE_RESPONSE_TLV: u8 = 2;
++
++const RR_PTR: u8 = 12;
++const RR_TXT: u8 = 16;
++const RR_SRV: u8 = 33;
++
++/// AWDL DNS compression codes (Wireshark `packet-awdl.c` table).
++const AWDL_NULL: u16 = 0xc000;
++const AWDL_AIRDROP_TCP_LOCAL: u16 = 0xc007;
++const AWDL_LOCAL: u16 = 0xc00c;
++
++/// Bits of the 256-bit Service Parameters bloom set by every macOS AirDrop
++/// receiver observed (iMac M1 and Mac mini M4, ≥95% of 923 frames) and absent
++/// from a browsing-only iPhone. Both are set: they cover `_airdrop._tcp`
++/// (possibly together with `_airplay-p2p._tcp`, the only other service both
++/// Macs always carried), and a false positive only makes a peer look at our
++/// Service Responses.
++pub const AIRDROP_BLOOM_BITS: [u8; 2] = [158, 183];
++
++/// What our own mDNS packet says about the `_airdrop._tcp` service.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum Announce {
++    /// A live announce (PTR TTL > 0) with its SRV.
++    Service(AirdropService),
++    /// A goodbye (PTR TTL == 0): the receiver is going away.
++    Goodbye,
++}
++
++/// The `_airdrop._tcp` instance luftlift is advertising.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct AirdropService {
++    /// Instance label, e.g. `luftlift-18387`.
++    pub instance: String,
++    /// HTTPS port from the SRV record.
++    pub port: u16,
++    /// TXT strings (without length prefixes), e.g. `flags=136`.
++    pub txt: Vec<Vec<u8>>,
++}
++
++/// Parse an Ethernet frame from the TAP. Returns `None` unless it is an
++/// IPv6/UDP mDNS response that carries a `_airdrop._tcp.local` PTR.
++pub fn parse_airdrop_announce(frame: &[u8]) -> Option<Announce> {
++    if frame.len() < 14 + 40 + 8 + 12 || u16::from_be_bytes([frame[12], frame[13]]) != 0x86dd {
++        return None;
++    }
++    if frame[14 + 6] != 17 {
++        return None; // not UDP
++    }
++    let udp = &frame[14 + 40..];
++    if u16::from_be_bytes([udp[0], udp[1]]) != 5353 {
++        return None;
++    }
++    parse_dns(&udp[8..])
++}
++
++fn parse_dns(msg: &[u8]) -> Option<Announce> {
++    let rd16 = |p: usize| -> Option<u16> { Some(u16::from_be_bytes([*msg.get(p)?, *msg.get(p + 1)?])) };
++    if rd16(2)? & 0x8000 == 0 {
++        return None; // a query, not a response
++    }
++    let qd = rd16(4)? as usize;
++    let rr = rd16(6)? as usize + rd16(8)? as usize + rd16(10)? as usize;
++    let mut pos = 12;
++    for _ in 0..qd {
++        pos = read_name(msg, pos)?.1 + 4;
++    }
++    let mut instance: Option<(Vec<u8>, String, u32)> = None; // (label, full name, ttl)
++    let mut srvs: Vec<(String, u16)> = Vec::new();
++    let mut txts: Vec<(String, Vec<Vec<u8>>)> = Vec::new();
++    for _ in 0..rr {
++        let (owner, p) = read_name(msg, pos)?;
++        let rtype = rd16(p)?;
++        let ttl = u32::from_be_bytes(msg.get(p + 4..p + 8)?.try_into().ok()?);
++        let rdlen = rd16(p + 8)? as usize;
++        let rdata_at = p + 10;
++        let rdata = msg.get(rdata_at..rdata_at + rdlen)?;
++        pos = rdata_at + rdlen;
++        let owner_s = join(&owner);
++        match rtype {
++            t if t == u16::from(RR_PTR) && owner_s == "_airdrop._tcp.local" => {
++                let (target, _) = read_name(msg, rdata_at)?;
++                let label = target.first()?.clone();
++                instance = Some((label, join(&target), ttl));
++            }
++            t if t == u16::from(RR_SRV) && rdata.len() >= 6 => {
++                srvs.push((owner_s, u16::from_be_bytes([rdata[4], rdata[5]])));
++            }
++            t if t == u16::from(RR_TXT) => {
++                let mut strings = Vec::new();
++                let mut i = 0;
++                while i < rdata.len() {
++                    let n = rdata[i] as usize;
++                    let s = rdata.get(i + 1..i + 1 + n)?;
++                    if !s.is_empty() {
++                        strings.push(s.to_vec());
++                    }
++                    i += 1 + n;
++                }
++                txts.push((owner_s, strings));
++            }
++            _ => {}
++        }
++    }
++    let (label, full, ttl) = instance?;
++    if ttl == 0 {
++        return Some(Announce::Goodbye);
++    }
++    let port = srvs.iter().find(|(o, _)| *o == full).map(|(_, p)| *p)?;
++    let txt = txts.into_iter().find(|(o, _)| *o == full).map(|(_, t)| t).unwrap_or_default();
++    Some(Announce::Service(AirdropService {
++        instance: String::from_utf8_lossy(&label).into_owned(),
++        port,
++        txt,
++    }))
++}
++
++/// Read a (possibly compressed) DNS name at `pos`. Returns the labels and the
++/// position just after the name in the original stream.
++fn read_name(msg: &[u8], mut pos: usize) -> Option<(Vec<Vec<u8>>, usize)> {
++    let mut labels = Vec::new();
++    let mut end = None;
++    for _ in 0..64 {
++        let len = *msg.get(pos)? as usize;
++        if len == 0 {
++            return Some((labels, end.unwrap_or(pos + 1)));
++        }
++        if len & 0xc0 == 0xc0 {
++            let target = ((len & 0x3f) << 8) | *msg.get(pos + 1)? as usize;
++            end.get_or_insert(pos + 2);
++            pos = target;
++            continue;
++        }
++        labels.push(msg.get(pos + 1..pos + 1 + len)?.to_vec());
++        pos += 1 + len;
++    }
++    None // pointer loop
++}
++
++fn join(labels: &[Vec<u8>]) -> String {
++    labels
++        .iter()
++        .map(|l| String::from_utf8_lossy(l).to_ascii_lowercase())
++        .collect::<Vec<_>>()
++        .join(".")
++}
++
++fn push_label(out: &mut Vec<u8>, label: &[u8]) {
++    let label = &label[..label.len().min(63)];
++    out.push(label.len() as u8);
++    out.extend_from_slice(label);
++}
++
++fn record(name: &[u8], rtype: u8, rdata: &[u8]) -> Vec<u8> {
++    let mut v = Vec::with_capacity(7 + name.len() + rdata.len());
++    v.extend_from_slice(&((name.len() + 1) as u16).to_le_bytes());
++    v.extend_from_slice(name);
++    v.push(rtype);
++    v.extend_from_slice(&(rdata.len() as u16).to_le_bytes());
++    v.extend_from_slice(&[0, 0]);
++    v.extend_from_slice(rdata);
++    v
++}
++
++/// Build the PTR, SRV and TXT Service Response TLV values for `svc`, with the
++/// SRV target `<host>.local` (`host` must match our Arpa TLV hostname).
++pub fn build_service_response_values(svc: &AirdropService, host: &str) -> Vec<Vec<u8>> {
++    let mut instance_name = Vec::new();
++    push_label(&mut instance_name, svc.instance.as_bytes());
++    instance_name.extend_from_slice(&AWDL_AIRDROP_TCP_LOCAL.to_be_bytes());
++
++    let mut ptr_rdata = Vec::new();
++    push_label(&mut ptr_rdata, svc.instance.as_bytes());
++    ptr_rdata.extend_from_slice(&AWDL_NULL.to_be_bytes());
++
++    let mut srv_rdata = vec![0, 0, 0, 0];
++    srv_rdata.extend_from_slice(&svc.port.to_be_bytes());
++    push_label(&mut srv_rdata, host.as_bytes());
++    srv_rdata.extend_from_slice(&AWDL_LOCAL.to_be_bytes());
++
++    let mut txt_rdata = Vec::new();
++    for s in &svc.txt {
++        push_label(&mut txt_rdata, s);
++    }
++    if txt_rdata.is_empty() {
++        txt_rdata.push(0); // empty TXT = one zero-length string (as macOS sends)
++    }
++
++    vec![
++        record(&AWDL_AIRDROP_TCP_LOCAL.to_be_bytes(), RR_PTR, &ptr_rdata),
++        record(&instance_name, RR_SRV, &srv_rdata),
++        record(&instance_name, RR_TXT, &txt_rdata),
++    ]
++}
++
++/// Service Parameters TLV value: 3 zero bytes, SUI (u16 LE), then the bloom as
++/// a u32 LE bitmap of non-zero byte offsets followed by those bytes.
++/// Without services this is the 9 zero bytes filin always sent.
++pub fn build_service_parameters_value(sui: u16, airdrop: bool) -> Vec<u8> {
++    let mut v = vec![0, 0, 0];
++    v.extend_from_slice(&sui.to_le_bytes());
++    if !airdrop {
++        v.extend_from_slice(&0u32.to_le_bytes());
++        return v;
++    }
++    let mut bloom = [0u8; 32];
++    for bit in AIRDROP_BLOOM_BITS {
++        bloom[usize::from(bit / 8)] |= 1 << (bit % 8);
++    }
++    let offsets = bloom
++        .iter()
++        .enumerate()
++        .filter(|(_, b)| **b != 0)
++        .fold(0u32, |acc, (i, _)| acc | 1 << i);
++    v.extend_from_slice(&offsets.to_le_bytes());
++    v.extend(bloom.iter().copied().filter(|b| *b != 0));
++    v
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn hex(s: &str) -> Vec<u8> {
++        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
++    }
++
++    #[test]
++    fn service_responses_match_macos_capture_byte_for_byte() {
++        // Mac mini M4 (macOS) AirDrop receiver, captured 2026-10-08.
++        let svc = AirdropService { instance: "7a6db550c271".into(), port: 8770, txt: vec![] };
++        let v = build_service_response_values(&svc, "3433d50b-c7f6-48f6-b8e4-b52fa2125ac3");
++        assert_eq!(v[0], hex("0300c0070c0f0000000c376136646235353063323731c000"));
++        assert_eq!(
++            v[1],
++            hex("10000c376136646235353063323731c007212d0000000000000022422433343333643530622d633766362d343866362d623865342d623532666132313235616333c00c")
++        );
++        assert_eq!(v[2], hex("10000c376136646235353063323731c007100100000000"));
++    }
++
++    #[test]
++    fn service_parameters_bloom_matches_macos_bytes_19_and_22() {
++        // Mac mini short form: offsets 0x11480000 → bytes 19,22,24,28 = 40 80 04 04.
++        let v = build_service_parameters_value(0x86e3, true);
++        assert_eq!(v, hex("000000e38600004800" ).into_iter().chain([0x40, 0x80]).collect::<Vec<_>>());
++        assert_eq!(build_service_parameters_value(7, false), hex("000000070000000000"));
++    }
++
++    fn mdns_frame(ptr_ttl: u32) -> Vec<u8> {
++        // Ethernet + IPv6 + UDP header, then a DNS response with a compressed
++        // PTR/SRV/TXT set like mdns-sd emits.
++        let mut dns = vec![0, 0, 0x84, 0, 0, 0, 0, 3, 0, 0, 0, 0];
++        let svc_at = dns.len();
++        dns.extend_from_slice(b"\x08_airdrop\x04_tcp\x05local\x00");
++        dns.extend_from_slice(&[0, 12, 0, 1]);
++        dns.extend_from_slice(&ptr_ttl.to_be_bytes());
++        let inst = b"\x0eluftlift-18387";
++        dns.extend_from_slice(&((inst.len() + 2) as u16).to_be_bytes());
++        let inst_at = dns.len();
++        dns.extend_from_slice(inst);
++        dns.extend_from_slice(&[0xc0, svc_at as u8]);
++        // SRV, owner compressed to the instance name
++        dns.extend_from_slice(&[0xc0, inst_at as u8, 0, 33, 0x80, 1, 0, 0, 0, 120]);
++        let target = b"\x04pi4B\x05local\x00";
++        dns.extend_from_slice(&((6 + target.len()) as u16).to_be_bytes());
++        dns.extend_from_slice(&[0, 0, 0, 0, 0x22, 0x43]);
++        dns.extend_from_slice(target);
++        // TXT
++        dns.extend_from_slice(&[0xc0, inst_at as u8, 0, 16, 0x80, 1, 0, 0, 0x11, 0x94]);
++        dns.extend_from_slice(&10u16.to_be_bytes());
++        dns.extend_from_slice(b"\x09flags=136");
++        let mut f = vec![0x33, 0x33, 0, 0, 0, 0xfb, 0, 0x3a, 0x9d, 0xaa, 0xac, 0xf8, 0x86, 0xdd];
++        let mut ip = vec![0x60, 0, 0, 0];
++        ip.extend_from_slice(&((8 + dns.len()) as u16).to_be_bytes());
++        ip.extend_from_slice(&[17, 255]);
++        ip.extend_from_slice(&[0; 32]);
++        f.extend(ip);
++        f.extend_from_slice(&[0x14, 0xe9, 0x14, 0xe9]);
++        f.extend_from_slice(&((8 + dns.len()) as u16).to_be_bytes());
++        f.extend_from_slice(&[0, 0]);
++        f.extend(dns);
++        f
++    }
++
++    #[test]
++    fn parses_live_announce_and_goodbye() {
++        assert_eq!(
++            parse_airdrop_announce(&mdns_frame(4500)),
++            Some(Announce::Service(AirdropService {
++                instance: "luftlift-18387".into(),
++                port: 8771,
++                txt: vec![b"flags=136".to_vec()],
++            }))
++        );
++        assert_eq!(parse_airdrop_announce(&mdns_frame(0)), Some(Announce::Goodbye));
++    }
++
++    #[test]
++    fn ignores_non_mdns_and_queries() {
++        let mut f = mdns_frame(4500);
++        f[14 + 40 + 8 + 2] = 0; // clear QR: now a query
++        assert_eq!(parse_airdrop_announce(&f), None);
++        assert_eq!(parse_airdrop_announce(&f[..20]), None);
++    }
++}
+-- 
+2.47.3
+

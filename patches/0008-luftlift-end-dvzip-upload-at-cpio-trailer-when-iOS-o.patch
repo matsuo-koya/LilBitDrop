@@ -1,0 +1,269 @@
+From 3796ad5bc9d0be135a87ee121f690702de54633b Mon Sep 17 00:00:00 2001
+From: koya <235002527+matsuo-koya@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 11:57:39 +0900
+Subject: [PATCH 8/8] luftlift: end dvzip upload at cpio trailer when iOS omits
+ last-chunk; LUFTLIFT_INSTANCE
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/luftlift-rs/src/dvzip.rs  | 67 +++++++++++++++++++++++++++++++-
+ crates/luftlift-rs/src/mdns.rs   |  5 ++-
+ crates/luftlift-rs/src/server.rs | 66 ++++++++++++++++++++++++-------
+ 3 files changed, 123 insertions(+), 15 deletions(-)
+
+diff --git a/crates/luftlift-rs/src/dvzip.rs b/crates/luftlift-rs/src/dvzip.rs
+index aae9146..6bdf706 100644
+--- a/crates/luftlift-rs/src/dvzip.rs
++++ b/crates/luftlift-rs/src/dvzip.rs
+@@ -72,6 +72,55 @@ pub fn dvzip_to_cpio(data: &[u8]) -> Vec<u8> {
+     out
+ }
+ 
++/// Incremental end-of-archive detector for a dvzip `/Upload` body that is
++/// still arriving.
++///
++/// AirBridge (iOS 27.2, 2026-10-08): for a ~5.6 MB photo the sender streamed
++/// the whole dvzip (ending in the block that carries the cpio `TRAILER!!!`)
++/// but never sent the chunked last-chunk `0\r\n\r\n`; it waited for our
++/// response while we waited for the terminator, and iOS reported the
++/// transfer as declined. The archive end tells us the body is complete.
++#[derive(Debug, Default)]
++pub struct DvzipEndDetector {
++    scan_pos: usize,
++}
++
++impl DvzipEndDetector {
++    /// `body` is the decoded (de-chunked) body received so far. Each complete
++    /// block is inspected once. Returns true when the blocks end exactly at
++    /// `body.len()` and the last one holds the cpio trailer entry.
++    pub fn complete(&mut self, body: &[u8]) -> bool {
++        let mut trailer = false;
++        while self.scan_pos + 4 <= body.len() {
++            let word = u32::from_be_bytes([
++                body[self.scan_pos],
++                body[self.scan_pos + 1],
++                body[self.scan_pos + 2],
++                body[self.scan_pos + 3],
++            ]);
++            let len = (word & !STORED_BLOCK_FLAG) as usize;
++            let start = self.scan_pos + 4;
++            if len == 0 || start + len > body.len() {
++                return false; // block not fully received yet
++            }
++            let block = &body[start..start + len];
++            trailer = if word & STORED_BLOCK_FLAG != 0 {
++                contains_cpio_trailer(block)
++            } else {
++                let mut out = Vec::new();
++                ZlibDecoder::new(block).read_to_end(&mut out).is_ok() && contains_cpio_trailer(&out)
++            };
++            self.scan_pos = start + len;
++        }
++        trailer && self.scan_pos == body.len()
++    }
++}
++
++fn contains_cpio_trailer(data: &[u8]) -> bool {
++    const TRAILER: &[u8] = b"TRAILER!!!\0";
++    data.windows(TRAILER.len()).any(|w| w == TRAILER)
++}
++
+ /// Encode a CPIO archive as a dvzip payload: zlib-compress the whole archive
+ /// and frame it as a single `[u32 BE length][zlib stream]` block. The decoder
+ /// ([`dvzip_to_cpio`) handles any number of blocks; one block is functionally
+@@ -121,7 +170,7 @@ pub fn cpio_to_dvzip_blocks(cpio: &[u8], num_blocks: usize) -> Vec<u8> {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::{cpio_to_dvzip, cpio_to_dvzip_blocks, dvzip_to_cpio, STORED_BLOCK_FLAG};
++    use super::{cpio_to_dvzip, cpio_to_dvzip_blocks, dvzip_to_cpio, DvzipEndDetector, STORED_BLOCK_FLAG};
+     use crate::cpio::build_odc_cpio;
+     use flate2::write::ZlibEncoder;
+     use flate2::Compression;
+@@ -249,4 +298,20 @@ mod tests {
+         body.extend_from_slice(&cpio_to_dvzip(c));
+         assert_eq!(dvzip_to_cpio(&body), cpio);
+     }
++
++    #[test]
++    fn end_detector_fires_only_after_trailer_block_completes() {
++        let cpio = build_odc_cpio(&[("photo.jpg", &[0xCD; 5000])]);
++        let body = cpio_to_dvzip_blocks(&cpio, 3);
++        let mut det = DvzipEndDetector::default();
++        // Feed in uneven pieces, like HTTP chunks.
++        let mut fired_at = None;
++        for end in (1..=body.len()).step_by(777).chain([body.len()]) {
++            if det.complete(&body[..end]) {
++                fired_at = Some(end);
++                break;
++            }
++        }
++        assert_eq!(fired_at, Some(body.len()));
++    }
+ }
+diff --git a/crates/luftlift-rs/src/mdns.rs b/crates/luftlift-rs/src/mdns.rs
+index 4d40c97..a526270 100644
+--- a/crates/luftlift-rs/src/mdns.rs
++++ b/crates/luftlift-rs/src/mdns.rs
+@@ -70,7 +70,10 @@ pub struct MdnsConfig {
+ /// entries appear in the Apple AirDrop picker, a fresh run is distinguishable
+ /// from a stale ghost left by a crashed/killed previous run.
+ pub fn build_airdrop_service_info(cfg: &MdnsConfig, addr: IpAddr) -> Result<ServiceInfo> {
+-    let instance = format!("{}-{}", cfg.computer_name, std::process::id());
++    // AirBridge: LUFTLIFT_INSTANCE pins the instance name so a restart does
++    // not leave a ghost `<name>-<old pid>` entry in Apple pickers.
++    let instance = std::env::var("LUFTLIFT_INSTANCE")
++        .unwrap_or_else(|_| format!("{}-{}", cfg.computer_name, std::process::id()));
+     let hostname = format!("{}.local.", cfg.computer_name);
+     let mut props = HashMap::new();
+     props.insert("flags".to_string(), cfg.flags.to_string());
+diff --git a/crates/luftlift-rs/src/server.rs b/crates/luftlift-rs/src/server.rs
+index cf58273..e8c49f3 100644
+--- a/crates/luftlift-rs/src/server.rs
++++ b/crates/luftlift-rs/src/server.rs
+@@ -44,7 +44,7 @@ pub fn handle_one_connection(
+ /// need the interim response.
+ pub fn read_full_request(reader: &mut impl BufRead) -> Result<Vec<u8>> {
+     let header_bytes = read_headers(reader)?;
+-    let body = read_body(reader, &header_bytes)?;
++    let (body, _) = read_body(reader, &header_bytes)?;
+     let mut full = header_bytes;
+     full.extend_from_slice(&body);
+     Ok(full)
+@@ -71,7 +71,7 @@ pub fn read_request_respecting_expect(
+             writer.flush()?;
+         }
+     }
+-    let body = read_body(reader, &header_bytes)?;
++    let (body, _) = read_body(reader, &header_bytes)?;
+     let mut full = header_bytes;
+     full.extend_from_slice(&body);
+     Ok(full)
+@@ -101,21 +101,26 @@ fn read_headers(reader: &mut impl BufRead) -> Result<Vec<u8>> {
+ /// Read the body following already-parsed `header_bytes`. Dispatches on
+ /// `Content-Length` (exact read) or `Transfer-Encoding: chunked` (raw chunk
+ /// framing preserved for downstream `parse_request`).
+-fn read_body(reader: &mut impl BufRead, header_bytes: &[u8]) -> Result<Vec<u8>> {
++/// Returns the body and whether a chunked dvzip body was ended at its cpio
++/// trailer because the sender never sent the last-chunk (see
++/// [`crate::dvzip::DvzipEndDetector`]).
++fn read_body(reader: &mut impl BufRead, header_bytes: &[u8]) -> Result<(Vec<u8>, bool)> {
+     let head_str = std::str::from_utf8(header_bytes).unwrap_or("");
+     if let Some(cl_str) = parse_header_value(head_str, "content-length") {
+         let len: usize = cl_str.parse().unwrap_or(0);
+         let mut body = vec![0u8; len];
+         reader.read_exact(&mut body)?;
+-        Ok(body)
++        Ok((body, false))
+     } else if let Some(te_str) = parse_header_value(head_str, "transfer-encoding") {
+         if te_str.to_ascii_lowercase().contains("chunked") {
+-            Ok(read_chunked_stream(reader)?)
++            let dvzip = parse_header_value(head_str, "content-type")
++                .is_some_and(|ct| ct.eq_ignore_ascii_case("application/x-dvzip"));
++            read_chunked_stream(reader, dvzip)
+         } else {
+-            Ok(Vec::new())
++            Ok((Vec::new(), false))
+         }
+     } else {
+-        Ok(Vec::new())
++        Ok((Vec::new(), false))
+     }
+ }
+ 
+@@ -239,7 +244,7 @@ fn handle_tls_connection(
+                 reader.get_mut().flush()?;
+             }
+         }
+-        let body = read_body(&mut reader, &header_bytes)?;
++        let (body, ended_at_trailer) = read_body(&mut reader, &header_bytes)?;
+         let mut raw = header_bytes;
+         raw.extend_from_slice(&body);
+ 
+@@ -310,6 +315,22 @@ fn handle_tls_connection(
+             }
+         }
+         served += 1;
++        if ended_at_trailer {
++            // The sender may still send the last-chunk after our response.
++            // Read it (briefly) before closing so unread bytes don't turn our
++            // close into a RST that discards the response in flight.
++            let _ = reader.get_ref().sock.set_read_timeout(Some(std::time::Duration::from_secs(2)));
++            let mut sink = [0u8; 4096];
++            for _ in 0..4 {
++                match std::io::Read::read(&mut reader, &mut sink) {
++                    Ok(0) | Err(_) => break,
++                    Ok(_) => {}
++                }
++            }
++            reader.get_mut().conn.send_close_notify();
++            let _ = reader.get_mut().flush();
++            return Ok(());
++        }
+         if resp_closes || req_closes {
+             return Ok(());
+         }
+@@ -349,11 +370,18 @@ fn parse_header_value(headers: &str, name: &str) -> Option<String> {
+ /// payload (only the leading "." directory entry survived). We now error
+ /// loudly so truncation is visible instead of silently corrupting the
+ /// upload.
+-fn read_chunked_stream(reader: &mut impl BufRead) -> Result<Vec<u8>> {
++fn read_chunked_stream(reader: &mut impl BufRead, dvzip: bool) -> Result<(Vec<u8>, bool)> {
+     let mut raw = Vec::new();
+     let mut chunks = 0usize;
+     let mut last_size_line = String::new();
+-    let result = read_chunked_stream_into(reader, &mut raw, &mut chunks, &mut last_size_line);
++    let mut detector = dvzip.then(crate::dvzip::DvzipEndDetector::default);
++    let result = read_chunked_stream_into(
++        reader,
++        &mut raw,
++        &mut chunks,
++        &mut last_size_line,
++        detector.as_mut(),
++    );
+     if let Err(e) = &result {
+         warn!(
+             error = %e,
+@@ -364,7 +392,7 @@ fn read_chunked_stream(reader: &mut impl BufRead) -> Result<Vec<u8>> {
+             "chunked body read failed"
+         );
+     }
+-    result.map(|_| raw)
++    result.map(|early| (raw, early))
+ }
+ 
+ fn read_chunked_stream_into(
+@@ -372,7 +400,9 @@ fn read_chunked_stream_into(
+     raw: &mut Vec<u8>,
+     chunks: &mut usize,
+     last_size_line: &mut String,
+-) -> Result<()> {
++    mut detector: Option<&mut crate::dvzip::DvzipEndDetector>,
++) -> Result<bool> {
++    let mut body = Vec::new();
+     loop {
+         let mut size_line = String::new();
+         let n = reader.read_line(&mut size_line)?;
+@@ -413,8 +443,18 @@ fn read_chunked_stream_into(
+         let mut crlf = [0u8; 2];
+         reader.read_exact(&mut crlf)?;
+         raw.extend_from_slice(&crlf);
++        if let Some(det) = detector.as_deref_mut() {
++            body.extend_from_slice(&data);
++            if det.complete(&body) {
++                // Synthesize the missing last-chunk so parse_request decodes
++                // the body as a complete chunked stream.
++                raw.extend_from_slice(b"0\r\n\r\n");
++                info!(chunks = *chunks, bytes = body.len(), "dvzip body ended at cpio trailer (no last-chunk yet)");
++                return Ok(true);
++            }
++        }
+     }
+-    Ok(())
++    Ok(false)
+ }
+ 
+ // ---- raw /Upload body capture (LUFTLIFT_DUMP_UPLOAD) ----
+-- 
+2.47.3
+

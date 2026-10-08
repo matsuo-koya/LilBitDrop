@@ -1,0 +1,96 @@
+From 48011d97f51289509b8c6891e6d0d75c5d0da242 Mon Sep 17 00:00:00 2001
+From: koya <235002527+matsuo-koya@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 11:35:38 +0900
+Subject: [PATCH 6/8] luftlift: decode dvzip stored blocks (length top bit set)
+ from iOS 27
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/luftlift-rs/src/dvzip.rs | 37 ++++++++++++++++++++++++++++++---
+ 1 file changed, 34 insertions(+), 3 deletions(-)
+
+diff --git a/crates/luftlift-rs/src/dvzip.rs b/crates/luftlift-rs/src/dvzip.rs
+index f1592e3..aae9146 100644
+--- a/crates/luftlift-rs/src/dvzip.rs
++++ b/crates/luftlift-rs/src/dvzip.rs
+@@ -13,11 +13,21 @@
+ //!
+ //! Concatenating the inflated output of every block yields an ODC CPIO
+ //! archive (magic ASCII `070707`).
++//!
++//! AirBridge (iOS 27.2, 2026-10-08): when a block does not compress (JPEG
++//! payload), the sender sets the length's top bit and ships the block
++//! *stored*: `u32 BE (0x8000_0000 | len)` followed by `len` raw bytes. Seen as
++//! `0x80020000` (131072 raw bytes) mid-stream; without this the decoder read a
++//! ~2 GiB length, stopped, and every photo larger than one compressible
++//! block was lost (`cpio: short data field`).
+ 
+ use flate2::read::ZlibDecoder;
+ use std::io::Read;
+ use tracing::debug;
+ 
++/// Top bit of a block length: the block is stored uncompressed.
++const STORED_BLOCK_FLAG: u32 = 0x8000_0000;
++
+ /// Decode a dvzip payload into the underlying CPIO archive bytes.
+ ///
+ /// Matches `opendrop-patch/dvzip.py::dvzip_to_cpio`: walk framed zlib blocks,
+@@ -32,18 +42,25 @@ pub fn dvzip_to_cpio(data: &[u8]) -> Vec<u8> {
+     let mut out = Vec::new();
+     let mut pos = 0;
+     while pos + 4 <= data.len() {
+-        let block_len = u32::from_be_bytes([
++        let word = u32::from_be_bytes([
+             data[pos],
+             data[pos + 1],
+             data[pos + 2],
+             data[pos + 3],
+-        ]) as usize;
++        ]);
++        let stored = word & STORED_BLOCK_FLAG != 0;
++        let block_len = (word & !STORED_BLOCK_FLAG) as usize;
+         pos += 4;
+         if block_len == 0 || pos + block_len > data.len() {
++            debug!(block_len, pos, total = data.len(), stored, "dvzip: stopping at short/empty block");
+             break;
+         }
+         let raw = &data[pos..pos + block_len];
+         pos += block_len;
++        if stored {
++            out.extend_from_slice(raw);
++            continue;
++        }
+ 
+         let mut decoder = ZlibDecoder::new(raw);
+         let mut buf = Vec::new();
+@@ -104,7 +121,7 @@ pub fn cpio_to_dvzip_blocks(cpio: &[u8], num_blocks: usize) -> Vec<u8> {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::{cpio_to_dvzip, cpio_to_dvzip_blocks, dvzip_to_cpio};
++    use super::{cpio_to_dvzip, cpio_to_dvzip_blocks, dvzip_to_cpio, STORED_BLOCK_FLAG};
+     use crate::cpio::build_odc_cpio;
+     use flate2::write::ZlibEncoder;
+     use flate2::Compression;
+@@ -218,4 +235,18 @@ mod tests {
+         assert!(!dvzip.is_empty(), "empty CPIO still produces one zlib block");
+         assert_eq!(dvzip_to_cpio(&dvzip), Vec::<u8>::new());
+     }
++
++    #[test]
++    fn decodes_stored_blocks_mixed_with_zlib_blocks() {
++        // iOS 27 framing: zlib block, then a stored block (top bit set),
++        // then another zlib block.
++        let cpio = build_odc_cpio(&[("photo.jpg", &[0xAB; 300])]);
++        let (a, rest) = cpio.split_at(100);
++        let (b, c) = rest.split_at(150);
++        let mut body = cpio_to_dvzip(a);
++        body.extend_from_slice(&(STORED_BLOCK_FLAG | b.len() as u32).to_be_bytes());
++        body.extend_from_slice(b);
++        body.extend_from_slice(&cpio_to_dvzip(c));
++        assert_eq!(dvzip_to_cpio(&body), cpio);
++    }
+ }
+-- 
+2.47.3
+
