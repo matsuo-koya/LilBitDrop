@@ -225,3 +225,30 @@ filin は ch44/48/6/11 をホップ。**ch149 への切替は毎回 `Io(22)` (EI
 - 対応: `/opt/airbridge/opendrop-rs` ブランチ `airbridge/peer-timeout` で **10 s に変更**、
   `cargo build --release -p filin-rs`（差分 38 s）、peers テスト 11 件 pass。
   旧バイナリは `/opt/airbridge/bin/filin.orig-2s`。09:56:41 に入れ替え、receiver 名 `luftlift-18387`。
+
+## 修正版 filin (peer timeout 10s) での試験 (09:56–10:05)
+
+- iPhone の evict: **09:56:41〜10:04 で 1 回**（修正前は約9分で74回）。ピア維持は改善。
+- しかし Discover **0 回**（luftlift-18387 起動後 約9分）。ユーザー報告「表示されない」。
+- 採取 `test-20261008-100227`（3分、共有シートを30秒ごとに開閉）: iPhone は AWDL Action 194 件（ch44 中心）、
+  **データフレーム 0 件**（mDNS マルチキャストの問い合わせ・告知を一切送っていない）。
+
+### iOS 27.2 の iPhone は AWDL Service Response TLV でサービスを告知している
+
+`tools/awdl_tlv.py` / `tools/awdl_sr.py` で iPhone の Action フレームの TLV を分解:
+
+- 常時: type 4,5,6,7,12,16(Arpa: UUID 形式ホスト名),17,18,21,23,24,33。
+- **type 2 (Service Response) が 1 フレーム平均約6個**。内容:
+  - `_applicationservicepairing` / `_appsvcprepair` の PTR → "Air iPhone"
+  - 同 SRV（ホスト名 = Arpa の UUID、ポート）
+  - 同 TXT: `sn=com.apple.sharingd.AirDrop`, `sid=<UUID>`, `at=<hex>`, `dnm=Air iPhone`
+  - `_asquic` の PTR/SRV/TXT（17 フレーム）
+- iPhone 自身は `_airdrop._tcp` を告知していない（上流 iOS 18 メモと異なる）。
+
+filin が送る TLV は 4/5/6/7/12/16/18/… で **type 2 を一切送っていない**。
+自機の `_airdrop._tcp` は awdl0 上の mDNS マルチキャスト（データフレーム）だけで、iPhone の待受窓・
+チャンネルに偶然合ったときしか届かない → 発見が確率的（起動後 3.5〜6 分で1回、または来ない）という観測と整合。
+
+**仮説**: Apple 純正の受信機は `_airdrop._tcp` の PTR/SRV/TXT を自分の MIF の Service Response TLV で告知しており、
+iOS 27 の送信側は主にこれで受信機を見つける。filin に `_airdrop._tcp` の type 2 TLV 送信を実装すれば発見が安定する可能性。
+TLV 内部の名前圧縮（`c0 0a` など）とレコード形式は未解読 → Wireshark の AWDL dissector (tshark) で確認する。
