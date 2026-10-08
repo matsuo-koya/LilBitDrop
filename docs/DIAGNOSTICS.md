@@ -351,3 +351,10 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
   `is_no_ir_channel` は 52–64/100–144 のハードコードで、disabled の 149 を考慮していない。
 - 次: (1) ch149 を使えないチャンネルとして扱い 44 で埋める修正、(2) 共有シートを開いたまま 3 分の採取で、
   一覧に出た/消えた時刻とマスター切替・Discover・TCP の対応を取る。
+
+### ch149 修正 (12:44)
+- `patches/0009`（opendrop-rs `dc82351`）: SET_CHANNEL が EINVAL を返したチャンネルを実行時に「使用不可」として記録し、
+  注入・null 埋め・No-IR 置換先・mDNS 再告知の対象から外す（ch149 が使える地域では従来どおり）。テスト 232 件 pass。
+- 12:44 に入れ替え（旧版 `/opt/airbridge/bin/filin.pre-ch149`）。起動後1回目の失敗で ch149 を除外し、
+  以後の自機 chanseq は 6/44/48 のみ、`failed to switch` は 0、再告知カウンターから 149 が消えた。
+- 一覧表示への効果は iPhone 実機試験で確認する。

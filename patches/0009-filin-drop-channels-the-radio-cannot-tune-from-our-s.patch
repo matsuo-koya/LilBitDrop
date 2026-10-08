@@ -1,0 +1,177 @@
+From dc82351d01a1ceadf4115f90cd93332dd86c2c3b Mon Sep 17 00:00:00 2001
+From: koya <235002527+matsuo-koya@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 12:48:18 +0900
+Subject: [PATCH] filin: drop channels the radio cannot tune from our sequence
+
+On a JP-regulated carl9170, ch149 is disabled and SET_CHANNEL returns
+EINVAL, yet ensure_social_coverage injected it into our advertised
+sequence every cycle. Peers then believed we sat on 149 for those slots,
+and mDNS re-broadcasts there were wasted. Learn such channels on the
+first EINVAL and leave them out of injection, null fills, no-IR
+replacement targets and re-broadcast channels.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/filin-rs/src/lib.rs | 88 +++++++++++++++++++++++++++++++++-----
+ 1 file changed, 77 insertions(+), 11 deletions(-)
+
+diff --git a/crates/filin-rs/src/lib.rs b/crates/filin-rs/src/lib.rs
+index fdf8c4b..de53a11 100644
+--- a/crates/filin-rs/src/lib.rs
++++ b/crates/filin-rs/src/lib.rs
+@@ -1744,6 +1744,31 @@ pub mod channel {
+         matches!(channel, 52 | 56 | 60 | 64 | 100..=144 if channel.is_multiple_of(4))
+     }
+ 
++    /// Channels the monitor radio refused to tune to (EINVAL from
++    /// nl80211 SET_CHANNEL), e.g. ch149 on a JP-regulated adapter where it is
++    /// disabled. Learned at runtime so regions where 149 works keep it.
++    static UNUSABLE: [std::sync::atomic::AtomicU64; 4] = [
++        std::sync::atomic::AtomicU64::new(0),
++        std::sync::atomic::AtomicU64::new(0),
++        std::sync::atomic::AtomicU64::new(0),
++        std::sync::atomic::AtomicU64::new(0),
++    ];
++
++    /// Mark `channel` as one the radio cannot use. Returns true the first time.
++    pub fn mark_unusable(channel: u8) -> bool {
++        let bit = 1u64 << (channel % 64);
++        let prev = UNUSABLE[usize::from(channel / 64)]
++            .fetch_or(bit, std::sync::atomic::Ordering::Relaxed);
++        prev & bit == 0
++    }
++
++    /// True if the radio has refused to tune to `channel`.
++    pub fn is_unusable(channel: u8) -> bool {
++        UNUSABLE[usize::from(channel / 64)].load(std::sync::atomic::Ordering::Relaxed)
++            & (1u64 << (channel % 64))
++            != 0
++    }
++
+     pub fn channel_to_frequency_mhz(channel: u16) -> Option<u16> {
+         match channel {
+             0 => None,
+@@ -1998,6 +2023,15 @@ pub mod schedule {
+     /// The distinct social-channel NUMBERS (6, 44, 149), sorted ascending.
+     pub const AWDL_SOCIAL_CHANNEL_NUMS: [u8; 3] = [6, 44, 149];
+ 
++    /// `order` without the channels the radio refused to tune to
++    /// ([`crate::channel::is_unusable`]); `order` itself if that would leave
++    /// nothing.
++    fn usable(order: &[(u8, u8)]) -> Vec<(u8, u8)> {
++        let v: Vec<(u8, u8)> =
++            order.iter().copied().filter(|(ch, _)| !crate::channel::is_unusable(*ch)).collect();
++        if v.is_empty() { order.to_vec() } else { v }
++    }
++
+     /// Extract the adopted master's **anchor channel** — the slot-0 / primary
+     /// channel of the decoded master sequence — so filin can re-broadcast and
+     /// dwell on it adaptively (FILIN_ANCHOR_REBROADCAST.md). Returns slot 0's
+@@ -2034,7 +2068,8 @@ pub mod schedule {
+     /// (no master) only the social channels are returned.
+     pub fn rebroadcast_channels(anchor: u8) -> Vec<u8> {
+         use std::collections::BTreeSet;
+-        let mut set: BTreeSet<u8> = AWDL_SOCIAL_CHANNEL_NUMS.iter().copied().collect();
++        let mut set: BTreeSet<u8> =
++            usable(&AWDL_SOCIAL_CHANNELS).into_iter().map(|(ch, _)| ch).collect();
+         if anchor != 0 {
+             set.insert(anchor);
+         }
+@@ -2050,10 +2085,14 @@ pub mod schedule {
+     /// [`ensure_social_coverage`]. Returns the No-IR channels that were
+     /// replaced (in slot order), empty if there were none.
+     pub fn replace_no_ir_slots(seq: &mut [[u8; 2]; CHANSEQ_LEN]) -> Vec<u8> {
++        let socials = usable(&AWDL_SOCIAL_CHANNELS);
+         let mut replaced = Vec::new();
+         for slot in seq.iter_mut() {
+-            if slot[0] != 0 && crate::channel::is_no_ir_channel(slot[0]) {
+-                let (ch, opclass) = AWDL_SOCIAL_CHANNELS[replaced.len() % AWDL_SOCIAL_CHANNELS.len()];
++            if slot[0] != 0
++                && (crate::channel::is_no_ir_channel(slot[0])
++                    || crate::channel::is_unusable(slot[0]))
++            {
++                let (ch, opclass) = socials[replaced.len() % socials.len()];
+                 replaced.push(slot[0]);
+                 *slot = [ch, opclass];
+             }
+@@ -2082,7 +2121,7 @@ pub mod schedule {
+     /// back to the original `[149, 6, 44]` round-robin starting at 149.
+     pub fn ensure_social_coverage(seq: &mut [[u8; 2]; CHANSEQ_LEN], anchor: u8) -> Vec<u8> {
+         let mut injected = Vec::new();
+-        for &(ch, opclass) in &AWDL_SOCIAL_CHANNELS {
++        for (ch, opclass) in usable(&AWDL_SOCIAL_CHANNELS) {
+             if seq.iter().any(|s| s[0] == ch) {
+                 continue; // already present
+             }
+@@ -2106,7 +2145,7 @@ pub mod schedule {
+     fn fill_nulls_biased(seq: &mut [[u8; 2]; CHANSEQ_LEN], anchor: u8) {
+         if anchor == 0 {
+             // Original behaviour: round-robin 149/6/44 starting at 149.
+-            let order = [(149u8, 0x80u8), (6, 0x51), (44, 0x80)];
++            let order = usable(&[(149u8, 0x80u8), (6, 0x51), (44, 0x80)]);
+             let mut idx = 0;
+             for slot in seq.iter_mut() {
+                 if slot[0] == 0 {
+@@ -2119,7 +2158,7 @@ pub mod schedule {
+         }
+         // Anchor-biased: alternate anchor with social channels.
+         let anchor_opclass = opclass_for_channel(anchor);
+-        let socials = [(149u8, 0x80u8), (6, 0x51), (44, 0x80)];
++        let socials = usable(&[(149u8, 0x80u8), (6, 0x51), (44, 0x80)]);
+         let mut social_idx = 0;
+         let mut anchor_next = true;
+         for slot in seq.iter_mut() {
+@@ -3050,6 +3089,27 @@ pub mod schedule {
+             );
+         }
+ 
++        // --- channels the radio refused to tune (process-global registry;
++        // ch165 is not used by any other schedule test) ---
++
++        #[test]
++        fn unusable_channel_slots_are_replaced_and_never_injected() {
++            assert!(crate::channel::mark_unusable(165));
++            assert!(!crate::channel::mark_unusable(165)); // only reported once
++            let mut seq = [[0u8, 0u8]; CHANSEQ_LEN];
++            seq[0] = [165, 0x80];
++            seq[1] = [44, 0x80];
++            let replaced = replace_no_ir_slots(&mut seq);
++            assert_eq!(replaced, vec![165]);
++            assert!(AWDL_SOCIAL_CHANNEL_NUMS.contains(&seq[0][0]));
++            assert!(!rebroadcast_channels(165).is_empty());
++            assert_eq!(
++                usable(&[(165, 0x80), (44, 0x80)]),
++                vec![(44, 0x80)],
++            );
++            assert_eq!(usable(&[(165, 0x80)]), vec![(165, 0x80)]); // never empty
++        }
++
+         // --- ensure_social_coverage: guarantee ch149 coverage ---
+ 
+         #[test]
+@@ -6288,11 +6348,17 @@ pub mod runtime {
+                                 slot = awdl_state.sync.current_eaw(now_us) % 16,
+                                 "switched monitor channel"
+                             ),
+-                            Err(err) => tracing::warn!(
+-                                ?err,
+-                                channel,
+-                                "failed to switch monitor channel"
+-                            ),
++                            Err(err) => {
++                                tracing::warn!(?err, channel, "failed to switch monitor channel");
++                                if err == os::nl80211::Error::Io(libc::EINVAL)
++                                    && u8::try_from(channel).is_ok_and(channel::mark_unusable)
++                                {
++                                    tracing::info!(
++                                        channel,
++                                        "radio cannot tune channel; dropping it from our sequence"
++                                    );
++                                }
++                            }
+                         }
+                     }
+                 }
+-- 
+2.47.3
+
