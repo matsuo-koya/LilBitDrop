@@ -201,3 +201,16 @@ filin は ch44/48/6/11 をホップ。**ch149 への切替は毎回 `Io(22)` (EI
 2. luftlift の受信ログを詳細化（RUST_LOG=debug / `/trace`）し、Discover 要求のヘッダーと plist キー名、
    応答 HTTP 全体を記録する（SenderRecordData の中身は個人情報なので保存しない）。
 3. 共有シートの開閉を繰り返したとき Discover が何回来るかを記録する。
+
+## iPhone 実機試験 #2 (2026-10-08 09:47–09:48 JST) — 一覧表示・転送開始に成功
+
+試験 #1 の採取終了後、ユーザーが再度共有シートを開いたところ **`luftlift-15559` が iPhone の一覧に表示され、送信操作で受信した**（ユーザー報告）。
+
+- luftlift: `discover_count=3`, `ask_count=1`, `upload_count=1`, `last_peer="Air iPhone"`。awdl0 RX 3140 / TX 2895 パケット。
+- 09:48:13 Ask（`file_count=1`）を自動承認 → 09:48:20 Upload。
+- **しかしファイルは保存されず**: `cpio: stopping, short data field pos=197 filesize=4000944` → `Upload complete count=0`。
+  incoming は空。dvzip のブロック解凍エラーのログは無く、`dvzip_to_cpio` のループが
+  `block_len == 0 || pos + block_len > data.len()` で黙って終了したとみられる（本文の途中切れ、または iOS 27 で形式が変化）。
+- → Gate D（一覧表示）達成、Gate E（保存）未達。
+- 対応: receiver に `LUFTLIFT_DUMP_UPLOAD=/var/lib/airbridge/upload-dumps`（root 700）の drop-in を追加し、
+  生の Upload 本文を保存して形式を解析する（`systemd/airbridge-receiver.service.d/20-dump-upload.conf`）。
