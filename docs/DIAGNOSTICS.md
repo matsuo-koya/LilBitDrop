@@ -214,3 +214,14 @@ filin は ch44/48/6/11 をホップ。**ch149 への切替は毎回 `Io(22)` (EI
 - → Gate D（一覧表示）達成、Gate E（保存）未達。
 - 対応: receiver に `LUFTLIFT_DUMP_UPLOAD=/var/lib/airbridge/upload-dumps`（root 700）の drop-in を追加し、
   生の Upload 本文を保存して形式を解析する（`systemd/airbridge-receiver.service.d/20-dump-upload.conf`）。
+
+## 「一瞬表示されて消える」(09:52) と filin ピアタイムアウト
+
+- 09:52:55 Discover 1回 → iPhone 一覧に一瞬表示 → 消えた（ユーザー報告）。
+- filin ログ: iPhone (`92:xx:xx:xx:xx:xx`) が **09:44〜09:53 で 74 回 evict**、2〜5秒おきに削除→再登録。
+- filin-rs `peers::PEER_TIMEOUT_US = 2_000_000`（owl 由来）。ホップ1周期 `HOP_CYCLE_US` ≈ 1.05 s。
+  非ピア宛ての送信は `DataSendDecision::Drop`、非ピアからのデータ受信は `drop data frame from non-peer`
+  → evict 中は双方向の通信が捨てられ、AirDrop セッションが途切れる。
+- 対応: `/opt/airbridge/opendrop-rs` ブランチ `airbridge/peer-timeout` で **10 s に変更**、
+  `cargo build --release -p filin-rs`（差分 38 s）、peers テスト 11 件 pass。
+  旧バイナリは `/opt/airbridge/bin/filin.orig-2s`。09:56:41 に入れ替え、receiver 名 `luftlift-18387`。
