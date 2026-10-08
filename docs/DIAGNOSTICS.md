@@ -284,3 +284,31 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
 - 10:57 `IMG_1611.jpg` 6,351,001 B: 同様に途中停止（このときは 2s evict によるデータ破棄あり）。
 - 09:48 約 4 MB: 7 秒で Upload 完了したが dvzip→cpio で `short data field`（形式または本文途中切れ、ダンプ無し）。
 - 仮説: スループット不足（ホップ中の iPhone 滞在チャンネルとの重なり不足）で iOS が打ち切る。要計測。
+
+## 大きい写真の受信成功 (12:01) と、そこまでの修正 (11:15–12:01)
+
+### 発見は全版で「約2分おき」だった（訂正）
+11:28 以降の全版で Discover は約2分おきに来ており、picker 表示は短時間で消える。単発試験で
+「この版は表示されない」と判断していたのはタイミングの偶然で、版ごとの A/B 判定の一部は信頼できない。
+ただし `ackfix`（全 unicast を実チャンネルで判定）は 5 分間 Discover 0 で、範囲を絞った版に置き換えた。
+
+### 修正一覧（`/opt/airbridge/opendrop-rs` ブランチ `airbridge/tlv-only`）
+| commit | 内容 | 根拠 |
+|---|---|---|
+| `114bad1` filin | transfer pin 中、pin 先 peer への unicast を実際の無線チャンネルで判定 | 送信ゲートが採用中の master 系列で判定し TCP ACK が約0.4秒保留→約150 KB/s |
+| `48011d9` luftlift | dvzip の stored block（長さ最上位ビット）を解凍せずそのまま連結 | 2.9 MB 本文の実データ: zlib 16 + stored 9 ブロック、`0x80020000` |
+| `6aca122` luftlift | リクエストヘッダのログ、30 秒 read timeout、chunk 読み取り失敗時の進捗ログ | 調査用 |
+| `3796ad5` luftlift | dvzip 本文を cpio `TRAILER!!!` で終端とみなす、`LUFTLIFT_INSTANCE` | iOS 27 が chunked の last-chunk `0\r\n\r\n` を送らず iPhone 側は「辞退」 |
+
+- receiver drop-in `30-stable-name.conf`: 受信機名 `AirBridge`、mDNS インスタンス `airbridge`（再起動ごとの幽霊表示対策）。
+
+### 結果
+- 12:01:28 Upload 開始 → 12:01:35 完了（**約7秒**）。`dvzip body ended at cpio trailer (no last-chunk yet) chunks=83 bytes=3717611`。
+- `IMG_1580.jpg` 3,723,276 B（Ask の FileSize と一致）、JPEG 5712×4284、Exif iPhone Air / 27.2。iPhone 表示「送信済み」。
+- **Gate E 達成（3.7 MB 写真）。**
+
+### 残課題
+- picker 表示が短時間で消える／約2分おきにしか Discover が来ない（発見の安定性）。
+- 再起動耐性: carl9170 の NO_IR（要ドライバ再読込）、サービス disabled。
+- `upload-dumps`（写真・送信者証明書を含む）の drop-in 撤去とファイル削除。
+- Gate F（USB gadget + Web UI）、Gate G（連続転送・再起動）。
