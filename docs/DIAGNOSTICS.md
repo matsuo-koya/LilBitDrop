@@ -252,3 +252,35 @@ filin が送る TLV は 4/5/6/7/12/16/18/… で **type 2 を一切送ってい�
 **仮説**: Apple 純正の受信機は `_airdrop._tcp` の PTR/SRV/TXT を自分の MIF の Service Response TLV で告知しており、
 iOS 27 の送信側は主にこれで受信機を見つける。filin に `_airdrop._tcp` の type 2 TLV 送信を実装すれば発見が安定する可能性。
 TLV 内部の名前圧縮（`c0 0a` など）とレコード形式は未解読 → Wireshark の AWDL dissector (tshark) で確認する。
+
+## 発見の A/B と初の受信成功 (10:31–11:14)
+
+filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
+
+| 版 | 内容 | 結果 |
+|---|---|---|
+| `filin.orig-2s` | 上流そのまま | Discover は来るが数分に1回、一覧に「一瞬」表示 |
+| `filin.peer10s` | peer timeout 10s | 約8分 Discover 0 |
+| `filin.svc-elect10s` | +Service Response TLV | Discover 0（iPhone/Mac とも非表示） |
+| `filin.svc-elect2s` | +election のみ 2s | Discover 0 |
+| `filin.tlv-only` | 上流 + Service Response TLV | **すぐ表示・表示が持続**。Ask まで到達、Upload 中に切断 |
+| `filin.tlv-grace`（現行） | tlv-only + 退去ピアのデータ猶予 10s | **小さい写真の受信に成功** |
+
+- ピアテーブル自体の保持を 10s にすると発見できなくなる（原因未特定）。テーブル/選出は owl の 2s のまま、
+  データ面（unicast TX ゲート、RX 受理、カーネル近隣エントリ）だけ 10s 猶予する方式にした。
+- `/opt/airbridge/opendrop-rs` ブランチ `airbridge/tlv-only`: `fbb798f`（TLV）, `c7fb6c1`（データ猶予）。
+  `airbridge/peer-timeout` ブランチは不採用の試行。
+
+### 11:13 iPhone → Pi 受信成功（Gate E: 小ファイル）
+
+- `IMG_1612.jpg` 103,327 バイト（Ask の FileSize と一致）、JPEG 1260×1266、SOI/EOI 正常。
+  `/var/lib/airbridge/incoming/IMG_1612.jpg`。iPhone 表示「送信済み」。
+- Upload 本文 78,275 バイト = dvzip 4 ブロック（43/66/78112/…）→ 正常に展開。
+
+### 未解決: 大きいファイル
+
+- 11:08 `IMG_1610.jpg` 5,150,752 B: TCP で 5,123,639 B 受信後、**iPhone 側が 11:09:00 に送信を停止**（Pi は全 ACK 済み、
+  受信窓 2.8 MB、iPhone の evict なし、Pi は ch44 固定・synced）。約 150 KB/s。iPhone に一瞬エラー表示。
+- 10:57 `IMG_1611.jpg` 6,351,001 B: 同様に途中停止（このときは 2s evict によるデータ破棄あり）。
+- 09:48 約 4 MB: 7 秒で Upload 完了したが dvzip→cpio で `short data field`（形式または本文途中切れ、ダンプ無し）。
+- 仮説: スループット不足（ホップ中の iPhone 滞在チャンネルとの重なり不足）で iOS が打ち切る。要計測。
