@@ -72,7 +72,72 @@ PID 12546 は 08:12 の起動から **09:07:49 まで約55分間 Io(16) 再試�
   → **仮説**: このフィールドは初回 announce 時のみ更新。Phase 3 でコード確認する。値だけで広告停止と判断しない。
 - force-master では synced=false / alignment 0% が再現（ハンドオフ 4.5 と一致）。
 
-### 未実施（Phase 1 以降）
+---
 
-- `--no-force-master` を systemd 経由で起動し、同条件で比較。
-- iPhone 実機を使った試験（時刻・機種・iOS版を記録）。
+## Phase 1 — systemd 一本化 (2026-10-08 09:20 JST 適用)
+
+適用内容:
+
+- `/opt/airbridge/bin/filin-guard.sh`（ExecStartPre。他の filin が居れば起動拒否）
+- `/etc/systemd/system/airbridge-awdl.service.d/10-single-filin.conf`
+  （`FILIN_EXTRA_ARGS` 既定 `--no-force-master`、`StartLimitIntervalSec=0`）
+
+手順: receiver/awdl を stop → `pgrep -ax filin` が空を確認 → install → daemon-reload → awdl start → receiver start。
+
+結果（09:21）: `filin` 1個 (PID 14868, `--no-force-master`)、`luftlift` 1個。
+起動5秒後 `synced=true`, `aw_alignment_pct=93`, 外部 master, `master_changes=6`, `mdns_rx_other=0`。
+filin は ch44/48/6/11 をホップ。**ch149 への切替は毎回 `Io(22)` (EINVAL)** — JP では ch149 は disabled なので想定通り。
+
+---
+
+## 重大発見: 5GHz では注入フレームが1つも送信されていない (09:22〜09:30)
+
+### 観測
+
+`iw phy phy3 info`（carl9170）で ch36/40/44/48 が **`(no IR)`**、52–64 は `no IR, radar detection`。
+グローバル/phy#3 の regdomain 表示は JP（5170–5250 は NO-IR なし）にもかかわらず。
+
+### カーネル側のコード（rpi-6.18.y）
+
+- `net/mac80211/tx.c` `ieee80211_monitor_start_xmit()` L2455:
+  `if (!cfg80211_reg_can_beacon(wiphy, chandef, iftype)) goto fail_rcu;`
+  → `fail_rcu` は `dev_kfree_skb()` して `NETDEV_TX_OK` を返す = **無言で破棄、カウンター無し**。
+- `cfg80211_reg_check_beaconing()`（chan.c L1509, bool）は NO_IR チャンネルで false。
+- `drivers/net/wireless/ath/regd.c` `ath_regd_init_wiphy()`: EEPROM が world 以外（本機 0x88=JP）
+  のとき `ath_default_world_regdomain()` を custom regulatory として適用。この表は
+  5150–5350 / 5470–5850 を **`NL80211_RRF_NO_IR`** で定義 → 5GHz 全域が初期 NO_IR。
+- `carl9170/main.c` L1988 で非 world なら `regulatory_hint(wiphy, "JP")` を出すが、
+  起動時 `cfg80211.ieee80211_regdom=JP`（/proc/cmdline）が先に効いており、
+  結果として phy3 の NO_IR が残っている。どの経路で残ったかは未特定（reg.c の strict 置換が
+  走れば消えるはずなので、ドライバ再probe時の挙動で検証する）。
+
+### 計測（kprobe、20秒、filin `--no-force-master` 稼働中）
+
+`ieee80211_monitor_start_xmit` 入口 → `cfg80211_reg_check_beaconing(freq)` の戻り値 → `carl9170_op_tx` 到達を1フレームずつ対応付け:
+
+| freq | check | 件数 | ドライバ到達 |
+|---|---|---|---|
+| 2437 (ch6) | true | 16 | 16 |
+| 5180 (ch36) | false | 11 | 0 |
+| 5220 (ch44) | false | 51 | 0 |
+| 5240 (ch48) | false | 110 | 0 |
+
+（15秒の別計測では入口128件中ドライバ到達13件。journal との時刻突合はクロック差で不正確だったため上の直接計測を正とする）
+
+### 結論
+
+- **ch44/48 上の AWDL アクションフレーム・mDNS・DATA は電波に出ていない。** 2.4GHz ch6 のみ送信される。
+- これまで `tcpdump -i wlan1` で見えた自機DATAフレームは、AF_PACKET の送信タップで
+  mac80211 が破棄する前にコピーされたもの。ハンドオフ 4.3 の「キャプチャ≠送信」の懸念が的中。
+- force-master で `synced=false`/alignment 0% だったのは、自分の同期フレームが誰にも届かないため。
+  外部 AWDL DATA が 0 なのも、iPhone 一覧に出ないのも、まずこれで説明できる（BLE 問題は別途残る）。
+- JP の電波法上 W52 (ch36–48) は屋内で送信可・DFS 不要。W53 (52–64) は DFS 必須なので NO_IR のままで正しい。
+  → 正しい修正は「phy3 に JP ルールを正しく反映させる」こと。規制回避ではない。
+
+### 次の検証（要確認・未実施）
+
+1. `sudo iw reg set JP`（同一 alpha2 の再ヒント）で phy3 のフラグが変わるか。
+2. サービス停止 → carl9170 の USB unbind/bind（または `modprobe -r carl9170 && modprobe carl9170`）で
+   ドライバヒントを再処理させ、`iw phy phy3 info` の ch36–48 から `no IR` が消えるか。
+3. 消えたら同じ kprobe 計測で 5GHz の `carl9170_op_tx` 到達を確認 → force-master / no-force-master を再比較。
+4. 恒久化（起動順序・udev 等）は 2 の結果を見て決める。
