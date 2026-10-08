@@ -1,0 +1,110 @@
+From c921e16d03b1ad0613e0be3e3e5e42fd214547d5 Mon Sep 17 00:00:00 2001
+From: koya <235002527+matsuo-koya@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 13:03:15 +0900
+Subject: [PATCH] filin: FILIN_OWN_SEQUENCE=1 keeps our own channel sequence
+ under a master
+
+While synced to an external master filin copied the sync parent's channel
+sequence. The parent changes every few seconds in a busy cluster, so our
+schedule kept moving, mostly onto 48, while an iPhone with the AirDrop
+sheet open sits on 44. With the flag filin takes only the master's AW
+timing and advertises/follows 44 in every slot except ch6 in slot 8.
+Off by default.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/filin-rs/src/lib.rs | 43 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 43 insertions(+)
+
+diff --git a/crates/filin-rs/src/lib.rs b/crates/filin-rs/src/lib.rs
+index de53a11..06cda02 100644
+--- a/crates/filin-rs/src/lib.rs
++++ b/crates/filin-rs/src/lib.rs
+@@ -2136,6 +2136,17 @@ pub mod schedule {
+         injected
+     }
+ 
++    /// AirBridge's own channel sequence: `anchor` in every slot except slot 8,
++    /// which is ch6 as in every Apple sequence observed (idle and with the
++    /// AirDrop sheet open). Used with `FILIN_OWN_SEQUENCE=1`.
++    pub fn own_channel_sequence(anchor: u8) -> [[u8; 2]; CHANSEQ_LEN] {
++        let mut seq = [[anchor, crate::state::chan_opclass(u16::from(anchor))]; CHANSEQ_LEN];
++        if anchor != 6 {
++            seq[8] = [6, 0x51];
++        }
++        seq
++    }
++
+     /// Fill remaining null (channel-0) slots. When `anchor` is non-zero, the
+     /// anchor alternates with round-robin social channels (`[anchor, 149,
+     /// anchor, 6, anchor, 44, ...]`) so the master's primary channel gets
+@@ -3089,6 +3100,15 @@ pub mod schedule {
+             );
+         }
+ 
++        #[test]
++        fn own_sequence_is_anchor_with_ch6_in_slot_8() {
++            let seq = own_channel_sequence(44);
++            for (i, s) in seq.iter().enumerate() {
++                assert_eq!(*s, if i == 8 { [6, 0x51] } else { [44, 0x80] });
++            }
++            assert_eq!(own_channel_sequence(6), [[6, 0x51]; CHANSEQ_LEN]);
++        }
++
+         // --- channels the radio refused to tune (process-global registry;
+         // ch165 is not used by any other schedule test) ---
+ 
+@@ -4584,6 +4604,13 @@ pub mod state {
+         /// park mode — `desired_channel` returns this channel for every EAW
+         /// slot and `update_channel` never hops. Set via [`enable_park`].
+         park_channel: Option<u8>,
++        /// AirBridge (`FILIN_OWN_SEQUENCE=1`): while synced to an external
++        /// master, take only its AW *timing* and advertise/follow our own
++        /// [`crate::schedule::own_channel_sequence`] instead of copying the
++        /// sync parent's sequence. The parent churns every few seconds, and
++        /// each copy moved us off 44, where an iPhone with the AirDrop sheet
++        /// open spends most of its AWDL slots.
++        pub own_sequence: bool,
+         /// AirBridge: our `_airdrop._tcp` service, parsed from luftlift's
+         /// mDNS announce on the TAP, advertised in MIF Service Response TLVs.
+         pub airdrop_service: Option<crate::svcdisc::AirdropService>,
+@@ -4624,6 +4651,7 @@ pub mod state {
+                 last_seen_master_addr: self_addr,
+                 last_seen_sync_addr: self_addr,
+                 park_channel: None,
++                own_sequence: false,
+                 airdrop_service: None,
+                 airdrop_service_at_us: 0,
+                 service_sui: 0,
+@@ -4777,6 +4805,17 @@ pub mod state {
+                     self.master_anchor = 0; // no external master
+                     tracing::debug!("reverted to static anchor channel sequence");
+                 }
++            } else if self.own_sequence {
++                let seq = crate::schedule::own_channel_sequence(self.anchor_channel as u8);
++                if self.channel_sequence != seq {
++                    self.channel_sequence = seq;
++                    self.master_anchor = self.anchor_channel as u8;
++                    tracing::info!(
++                        master = ?master,
++                        final = ?seq.iter().map(|s| s[0]).collect::<Vec<u8>>(),
++                        "using own channel sequence (timing from master)"
++                    );
++                }
+             } else if let Some(peer) = self.peers.get(&master) {
+                 // adopted master: copy its sequence if it has any non-null slots
+                 if peer.sequence.iter().any(|s| s[0] != 0)
+@@ -6202,6 +6241,10 @@ pub mod runtime {
+             links.anchor_channel,
+             host_time_us(),
+         );
++        awdl_state.own_sequence = std::env::var("FILIN_OWN_SEQUENCE").is_ok_and(|v| v == "1");
++        if awdl_state.own_sequence {
++            tracing::info!("FILIN_OWN_SEQUENCE=1: own channel sequence, master timing only");
++        }
+         // --force-master: seed the election so filin wins and stays master,
+         // forcing the cluster onto filin's social-channel sequence.
+         if let Some(metric) = force_master {
+-- 
+2.47.3
+

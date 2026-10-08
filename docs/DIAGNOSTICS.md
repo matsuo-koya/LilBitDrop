@@ -358,3 +358,17 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
 - 12:44 に入れ替え（旧版 `/opt/airbridge/bin/filin.pre-ch149`）。起動後1回目の失敗で ch149 を除外し、
   以後の自機 chanseq は 6/44/48 のみ、`failed to switch` は 0、再告知カウンターから 149 が消えた。
 - 一覧表示への効果は iPhone 実機試験で確認する。
+
+### 一覧表示の安定化 (12:54–13:03)
+
+- ch149 修正だけの試験 (12:54): 12:52 に TCP 接続失敗 3 回（RST/EAGAIN）→ 12:54:54 Discover → 1分未満で一覧から消えた。
+- 20秒の電波採取で election TLV を解析: **周囲の全端末（iPhone・自機含む）が同じトップマスター `92:yy:yy:yy:yy:yy` に揃っていた**。
+  filin ログの「master」の入れ替わりは sync 親（直接の同期先）の入れ替わりで、クラスターは1つ。
+- 本当の問題: filin は sync 親の chanseq をそのままコピーしていた。親が数秒ごとに変わるたびに自機の予定表が変わり、
+  大半が ch48。共有シートを開いた iPhone は `[44,44,44,0,…,6,44,44,…]` で、重なりは16スロット中2〜3。
+- `patches/0010`（opendrop-rs `airbridge/tlv-only`）: `FILIN_OWN_SEQUENCE=1` で、マスターからは AW のタイミングだけを取り、
+  自機の予定表は 44 固定（スロット8のみ ch6、Apple 端末と同じ）を告知・追従する。既定はオフ。テスト 233 件 pass。
+  drop-in `systemd/airbridge-awdl.service.d/20-own-sequence.conf` で有効化。
+- 結果 (12:59 起動): **起動11秒で Discover、すぐ一覧に表示**。一度消えて再表示後は **表示され続けた**（13:01–13:03、ユーザー報告）。
+  13:03 写真送信: Ask→Upload 完了まで **約2.2秒**（2.85 MB、約1.3 MB/s。12:01 は 3.7 MB で約7秒）。iPhone「送信成功」。
+- 気づき: 同じファイル名（`IMG_1582.jpg`）を再送すると incoming の既存ファイルを**上書き**する。Gate G で対処する。
