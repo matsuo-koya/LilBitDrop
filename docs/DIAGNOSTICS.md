@@ -164,3 +164,40 @@ filin は ch44/48/6/11 をホップ。**ch149 への切替は毎回 `Io(22)` (EI
    ドライバヒントを再処理させ、`iw phy phy3 info` の ch36–48 から `no IR` が消えるか。
 3. 消えたら同じ kprobe 計測で 5GHz の `carl9170_op_tx` 到達を確認 → force-master / no-force-master を再比較。
 4. 恒久化（起動順序・udev 等）は 2 の結果を見て決める。
+
+---
+
+## iPhone 実機試験 #1 (2026-10-08 09:43:20–09:46:20 JST)
+
+- 端末: **iPhone Air / iOS 27.2**、AirDrop「すべての人（10分間）」、写真の共有シートで AirDrop を開いた。
+- 構成: 5GHz 送信修正後、filin `--no-force-master` 単一、luftlift `luftlift-15559`、flags 136 (0x88)。
+- 採取: `~/airbridge-diagnostics/test-20261008-094320/`（`capture-test.sh 180`）
+- **結果: iPhone の一覧に表示されず。**
+
+### 観測（Gate C 初達成）
+
+- awdl0 RX 0 → **14**（プロジェクト初の外部受信）。luftlift `discover_count=1`、`ask_count=0`。
+- iPhone の AWDL MAC `92:xx:xx:xx:xx:xx`（IPv6 `fe80::90xx:xxff:fexx:xxxx` から導出）。
+  3分間、AWDL Action を 118 件（ブロードキャスト）+ 3 件（自機宛）送信。
+- iPhone → 自機のデータフレームは **09:44:22 の 14 件のみ（ch48, MCS1）= awdl0 RX 14 と完全一致** → filin の取りこぼしなし。
+- iPhone からの mDNS マルチキャスト（`33:33:00:00:00:fb`）は **0 件**。luftlift `mdns_query_rx=0`。
+  iPhone は自機の能動的な mDNS 再告知でこちらを見つけたと考えられる。
+- awdl0 上の TCP 8771（1セッションのみ）:
+  SYN/SYN-ACK → ClientHello 約1.5KB → ServerHello 657B → クライアント Finished → Discover POST 約4.2KB
+  （SenderRecordData 入り plist と推定）→ 応答 269B（TLS 込み）→ サーバ FIN → iPhone RST。以後再接続なし。
+- 応答内容は上流と同じ `{ReceiverComputerName, ReceiverModelName, ReceiverMediaCapabilities}`（ReceiverRecordData なし）。
+
+### 解釈（仮説）
+
+- 無線/AWDL/IPv6/TCP/TLS は双方向に成立した。残る問題は **AirDrop アプリケーション層**で、
+  iPhone が Discover 応答を受け取った上で送信先として採用しなかった。
+- 上流 opendrop-rs の動作確認は **iOS 18.6.2** まで（`docs/airdrop-protocol.md`）。iOS 27.2 で
+  受信側に求める条件（例: ReceiverRecordData、TXT flags、HTTP 形式）が変わった可能性がある。**未検証。**
+- `luftlift --help` の flags 説明（0x06）は古く、実装の既定 0x88 は上流コミット `b7cb173` で意図的に変更されたもの。
+
+### 次の切り分け候補
+
+1. 旧 iOS/macOS（iOS 18 以前）の端末があれば同条件で試し、iOS バージョン依存かを切り分ける。
+2. luftlift の受信ログを詳細化（RUST_LOG=debug / `/trace`）し、Discover 要求のヘッダーと plist キー名、
+   応答 HTTP 全体を記録する（SenderRecordData の中身は個人情報なので保存しない）。
+3. 共有シートの開閉を繰り返したとき Discover が何回来るかを記録する。
