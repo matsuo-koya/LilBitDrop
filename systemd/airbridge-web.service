@@ -1,0 +1,17 @@
+[Unit]
+Description=AirBridge file inbox web UI
+After=airbridge-usb.service
+Wants=airbridge-usb.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/airbridge/bin/airbridge-web.py
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/airbridge/incoming
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=AirBridge AirDrop receiver (luftlift)
+After=airbridge-awdl.service
+Requires=airbridge-awdl.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/airbridge.conf
+ExecStartPre=/usr/bin/mkdir -p ${INCOMING_DIR}
+ExecStart=/opt/airbridge/bin/luftlift -i ${AWDL_IFACE} receive -o ${INCOMING_DIR}
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

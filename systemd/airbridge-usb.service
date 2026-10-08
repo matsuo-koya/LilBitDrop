@@ -1,0 +1,13 @@
+[Unit]
+Description=AirBridge USB network address
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=simple
+ExecStart=/opt/airbridge/bin/usb-network.sh
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
