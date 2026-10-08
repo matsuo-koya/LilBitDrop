@@ -327,3 +327,27 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
   format-patch。`git archive` + `git am` で適用するとブランチと完全一致することを確認。
   `install.sh` は `dccc798` から `airbridge/tlv-only` を作ってパッチを適用し、新スクリプト・unit・drop-in を入れて enable する。
 - **未検証: 実機の再起動**（Claude Code が Pi 上で動いているため、再起動はユーザーのタイミングで行う）。
+
+## 再起動テスト (12:16) と起動順序の循環
+
+- `airbridge-radio`: 起動直後 ch44 が `no IR` → carl9170 を1回再読込 → 7秒で送信可能に。**再起動で NO_IR は再発する**ので radio-setup は必須。
+- `airbridge-awdl` は起動したが **`airbridge-receiver` は起動されなかった**。
+  `airbridge-awdl` の `After=multi-user.target` と、receiver の `WantedBy=multi-user.target` + `After=airbridge-awdl` が循環し、
+  systemd が `Job airbridge-receiver.service/start deleted to break ordering cycle` で receiver を落とした。
+- 修正: awdl を `After=network.target NetworkManager.service` に（`d439d6e`）。修正版 unit 一式で
+  `systemd-analyze verify default.target` に循環が出ないことを確認。手動 start 後 12:32 に `IMG_1582.jpg`（2.87 MB）受信。
+- **未検証: 修正後の実機再起動。**
+
+## 発見の安定性: 調査メモ (12:35–)
+
+- 告知（Service Response TLV）は 12:28 に1回設定されたきり（`sui=1`）。途中で消えたり変わったりしていない。
+- 同期先マスターの入れ替わりが激しい: 約20分で `master_changes` 421回、周囲の 8 台の間で数秒ごとに切替。
+  `peer table cleaned` 476回（`PEER_TIMEOUT_US` 2s）。iPhone の chanseq は16スロット中4スロットしか AWDL に居ない
+  （`[48,0,44,0,0,0,0,0,6,0,44,0,...]`）ので、2s では表から落ちやすい。切替のたびに自機の時刻・chanseq が変わるのが
+  一覧から消える原因の候補。ただしピア表 10s は以前「発見されなくなった」ため、実機試験なしには変えない。
+- **ch149 の無駄**: `ensure_social_coverage` が ch149 を自機 chanseq に注入するが、このアダプター（JP）では ch149 は disabled。
+  `failed to switch monitor channel err=Io(22) channel=149` が毎周期出る。告知上は「そのスロットは ch149 に居る」ことになり、
+  iPhone（chanseq に 149 なし）はそのスロットで自機に送らない。mDNS 再告知も ch149 で 177 回空振り。
+  `is_no_ir_channel` は 52–64/100–144 のハードコードで、disabled の 149 を考慮していない。
+- 次: (1) ch149 を使えないチャンネルとして扱い 44 で埋める修正、(2) 共有シートを開いたまま 3 分の採取で、
+  一覧に出た/消えた時刻とマスター切替・Discover・TCP の対応を取る。
