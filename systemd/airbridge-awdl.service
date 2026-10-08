@@ -1,6 +1,9 @@
 [Unit]
 Description=AirBridge AWDL link (filin)
-After=multi-user.target
+# Not After=multi-user.target: the receiver is WantedBy multi-user and ordered
+# after this unit, so that would form an ordering cycle and systemd drops the
+# receiver job at boot.
+After=network.target NetworkManager.service
 
 [Service]
 Type=simple
