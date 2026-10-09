@@ -437,3 +437,9 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
 - 未確認: 修正後の再起動、iPhone の共有シートに「LilBitDrop」と出るか。
 - 11:29 iPhone の共有シートに **「LilBitDrop」と表示**（ユーザー確認）。PNG 1枚を送信: Ask 11:29:14.8 → Upload 完了 11:29:20.2（**約5.4秒**、4,000,944 B、
   PNG 1254×1254）。iPhone「送信済み」。AppleDouble の `._*.PNG`（1,751 B）も届くが保存はされていない。
+
+## 再起動テスト（10/9 13:35 頃起動、receiver 修正後）
+
+- 5サービスとも起動、失敗なし。radio-setup は1回の再読込（16.2s）で送信可能に（24.4s、回数記録 `1`）→ awdl 24.6s → **receiver 24.7s に自動起動**（再起動回数 0）。
+  35s に AWDL 告知 `instance: "lilbitdrop"`。Wi-Fi は自動接続、USB の名前は LilBitDrop。
+- 電源: 今回は起動中に電圧不足が4回、`throttled=0x50005`（11:16 起動時は0回）。給電の条件は要確認。
