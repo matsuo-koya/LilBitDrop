@@ -469,3 +469,11 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
   （NM の設定は触らない、reload もしない）。3つとも `unmanaged` を確認。
 - 実機で gadget を作り直し: c.1/c.2 とも作成、ブリッジに2ポート、`usb0` に 10.55.0.1、dnsmasq 起動、Web UI 200。
 - 未確認: Mac での ECM の選択・DHCP・ブラウザでの取得、再起動後の自動構成、Windows。
+
+### Mac での確認（10/9 19:18 頃起動、iMac 24" M1 に接続・給電）
+
+- 再起動後、ブリッジとポートは自動で構成。12.8s に列挙、**Mac は c.2（ECM）を選択**（`lbdecm0` UP、`lbdrndis0` は NO-CARRIER）。
+- DHCP: `iMac-24-M1` に 10.55.0.42（host MAC 02:43:…、ECM 側）。Mac のネットワーク設定にも表示（ユーザー確認）。
+- Web UI: Mac から `GET /` 200、`GET /files/…-1.PNG` 200（ダウンロード成功、ユーザー確認）。`lbdecm0` rx 1955 / tx 3329 パケット。
+- 5サービスとも active、`throttled=0x0`、電圧不足0回（この Mac の USB 給電では問題なし）。
+- **Gate F は macOS で達成。** Windows は未確認（USB-A 給電で未列挙、ケーブル/電力を要調査）。
