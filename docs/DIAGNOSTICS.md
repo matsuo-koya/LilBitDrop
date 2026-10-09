@@ -477,3 +477,10 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
 - Web UI: Mac から `GET /` 200、`GET /files/…-1.PNG` 200（ダウンロード成功、ユーザー確認）。`lbdecm0` rx 1955 / tx 3329 パケット。
 - 5サービスとも active、`throttled=0x0`、電圧不足0回（この Mac の USB 給電では問題なし）。
 - **Gate F は macOS で達成。** Windows は未確認（USB-A 給電で未列挙、ケーブル/電力を要調査）。
+
+### Windows での確認（10/10、ユーザー報告）
+
+- **Windows PC に USB で接続し、写真の転送（ブラウザでの取得）に成功**（ユーザー報告）。Gate F は Windows でも達成。
+- Pi 側のログでは裏付けられていない: 接続していたのは前回の起動中で、journal が永続化されていないため DHCP・Web のログは消えている。
+  確認時（05:19、起動8分）は USB 未接続（`not attached`）。今回の起動では電圧不足が21回（`throttled=0x50000`、確認時点では発生中ではない）。
+- 13:16 起動時に列挙されなかった原因（ケーブル／口／電力）は未記録。
