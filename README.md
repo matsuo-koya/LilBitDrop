@@ -16,6 +16,19 @@ A Raspberry Pi proof-of-concept that receives files from Apple's AirDrop on Linu
 
 This deliberately avoids presenting a live writable USB mass-storage filesystem, because changing a mounted filesystem behind the host OS risks corruption/cache incoherency.
 
+## Verified so far (2026-10-10)
+
+| What | Result |
+|---|---|
+| Sender | iPhone Air, iOS 27.2, AirDrop "Everyone for 10 Minutes" |
+| Picker | Shows **LilBitDrop** ~11–35 s after boot and stays listed |
+| Receive | Photos 0.1–4 MB (JPEG/PNG) saved in about 2–7 s; a re-sent name is saved as `name-1.ext` |
+| USB to macOS | iMac (M1) picks CDC-ECM; DHCP, inbox page and download OK |
+| USB to Windows | Windows picks RNDIS; DHCP, inbox page and download OK (one other PC/cable pair did not enumerate; not isolated) |
+| Boot | All services come up unattended (Pi 4B + NEC WL300NU-AG / carl9170) |
+
+Known limits: powering the Pi from a PC's USB-A port gives under-voltage warnings (transfers still worked); only AR9170/carl9170 adapters are known to work. The Pi 4B's built-in Wi-Fi with Nexmon did not work (monitor interface gets an all-zero MAC); see the `research/nexmon-bcm43455` branch. Step-by-step history: `docs/DIAGNOSTICS.md` (Japanese).
+
 ## Recommended PoC hardware
 
 - Raspberry Pi 4 or 5 (Pi 4 is a good first target)
@@ -176,6 +189,7 @@ v0.1 is intentionally simple:
 
 - Received files are automatically written to a local directory.
 - The HTTP server is reachable only over the Pi's interfaces; firewalling is recommended if other interfaces are active.
+- The receiver saves each file under its base name only (no `../` or absolute paths) and never overwrites an existing file.
 - Filenames are sanitized by the web layer for download and directory traversal is blocked.
 - Do not expose port 8080 to the public Internet.
 
