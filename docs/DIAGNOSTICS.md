@@ -435,3 +435,5 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
   - receiver: `Requires=` → `Wants=` + `PartOf=airbridge-awdl.service` + `StartLimitIntervalSec=0`。awdl の初回失敗で receiver が見捨てられない。
   - 実機に反映し、receiver を手動起動。AWDL の告知は `instance: "lilbitdrop"`。
 - 未確認: 修正後の再起動、iPhone の共有シートに「LilBitDrop」と出るか。
+- 11:29 iPhone の共有シートに **「LilBitDrop」と表示**（ユーザー確認）。PNG 1枚を送信: Ask 11:29:14.8 → Upload 完了 11:29:20.2（**約5.4秒**、4,000,944 B、
+  PNG 1254×1254）。iPhone「送信済み」。AppleDouble の `._*.PNG`（1,751 B）も届くが保存はされていない。
