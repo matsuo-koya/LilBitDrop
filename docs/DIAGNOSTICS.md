@@ -478,9 +478,9 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
 - 5サービスとも active、`throttled=0x0`、電圧不足0回（この Mac の USB 給電では問題なし）。
 - **Gate F は macOS で達成。** Windows は未確認（USB-A 給電で未列挙、ケーブル/電力を要調査）。
 
-### Windows での確認（10/10、ユーザー報告）
+### 10/10 05:10 起動（Windows に接続）
 
-- **Windows PC に USB で接続し、写真の転送（ブラウザでの取得）に成功**（ユーザー報告）。Gate F は Windows でも達成。
-- Pi 側のログでは裏付けられていない: 接続していたのは前回の起動中で、journal が永続化されていないため DHCP・Web のログは消えている。
-  確認時（05:19、起動8分）は USB 未接続（`not attached`）。今回の起動では電圧不足が21回（`throttled=0x50000`、確認時点では発生中ではない）。
-- 13:16 起動時に列挙されなかった原因（ケーブル／口／電力）は未記録。
+- 訂正: 直前の記録（`bbbfc3d`）は「Windows のブラウザで取得成功」と誤記。ユーザーが成功と報告したのは **iPhone → Pi の AirDrop 転送**で、Windows のブラウザでの取得は未確認。
+- Pi を Windows PC（USB-A）につないで起動。UDC は `not attached`（gadget は 18s に bind されたが列挙されず）、DHCP リースなし。**USB ネットワークは今回も不成立。**
+- その状態で AirDrop 受信は成功: 05:16:28.8 Ask → 05:16:33.9 保存（約5.1秒）、`FullSizeRender.jpg` 3,331,757 B、JPEG 5341×3170、iPhone Air / 27.2。
+- 電源: 起動10.8s から電圧不足、確認時点（起動8分）で21回、`throttled=0x50000`（過去に発生、確認時点では発生中でない）。
