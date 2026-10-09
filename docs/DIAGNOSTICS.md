@@ -454,4 +454,4 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
   `create_new` で作り、名前が使われていれば `name-1.ext`、`name-2.ext`…（同名の再送で上書きしない）。`._a.PNG` は `._a-1.PNG`。
   単体テスト3件を追加、luftlift のテスト全件 pass。実機に入れ替え（旧版 `/opt/airbridge/bin/luftlift.pre-0011`）。
 - Web UI: 先頭が `.` のファイル（AppleDouble `._*`）を一覧に出さない。
-- 未確認: 実機で同じ写真を再送して `-1` 付きで保存されること。
+- 14:14 同じ PNG を再送: Ask→Upload 完了 約4.8秒。**`…-1.PNG` として保存され、13:38 の元ファイルはそのまま**（内容は同一、`cmp` 一致）。`._…-1.PNG` も同様。Web UI は2枚とも表示し、`._*` は出ない。
