@@ -436,10 +436,12 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
   - 実機に反映し、receiver を手動起動。AWDL の告知は `instance: "lilbitdrop"`。
 - 未確認: 修正後の再起動、iPhone の共有シートに「LilBitDrop」と出るか。
 - 11:29 iPhone の共有シートに **「LilBitDrop」と表示**（ユーザー確認）。PNG 1枚を送信: Ask 11:29:14.8 → Upload 完了 11:29:20.2（**約5.4秒**、4,000,944 B、
-  PNG 1254×1254）。iPhone「送信済み」。AppleDouble の `._*.PNG`（1,751 B）も届くが保存はされていない。
+  PNG 1254×1254）。iPhone「送信済み」。AppleDouble の `._*.PNG`（1,751 B）も一緒に保存される（当初「保存されない」と書いたのは `ls` が隠しファイルを表示しなかったための誤り）。Web UI の一覧にも出る。
 
 ## 再起動テスト（10/9 13:35 頃起動、receiver 修正後）
 
 - 5サービスとも起動、失敗なし。radio-setup は1回の再読込（16.2s）で送信可能に（24.4s、回数記録 `1`）→ awdl 24.6s → **receiver 24.7s に自動起動**（再起動回数 0）。
   35s に AWDL 告知 `instance: "lilbitdrop"`。Wi-Fi は自動接続、USB の名前は LilBitDrop。
 - 電源: 今回は起動中に電圧不足が4回、`throttled=0x50005`（11:16 起動時は0回）。給電の条件は要確認。
+- 13:38 同じ PNG を再送: Ask 13:38:39.6 → Upload 完了 13:38:47.2（約7.6秒）。iPhone 側は成功。電圧不足が出ている状態（起動以降8回、`0x50005`）でも転送できた。
+  同名のため 11:29 のファイルを**上書き**（Gate G の課題）。
