@@ -56,6 +56,9 @@ class Handler(BaseHTTPRequestHandler):
     def index(self):
         files=[]
         for p in ROOT.iterdir():
+            # Hidden files, e.g. the AppleDouble "._IMG_1234.PNG" macOS/iOS
+            # sends next to each file (only Finder metadata).
+            if p.name.startswith("."): continue
             try:
                 if p.is_file(): files.append((p.stat().st_mtime,p))
             except OSError: pass

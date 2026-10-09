@@ -1,0 +1,139 @@
+From ccf03c97a4f5d5667b2a5c5a3817122dfd924b4f Mon Sep 17 00:00:00 2001
+From: koya <235002527+matsuo-koya@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 13:52:49 +0900
+Subject: [PATCH] luftlift: save received files by base name only, never
+ overwrite
+
+Archive entry names come from the sender (anyone nearby in Everyone mode)
+and were joined onto the output dir as-is, so ../ or absolute names wrote
+outside it as root. Keep only the last path component, and create files
+with create_new: a taken name becomes name-1.ext, name-2.ext, ... (iOS
+reuses names like IMG_1582.jpg on a re-send).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/luftlift-rs/src/server.rs | 94 +++++++++++++++++++++++++++++++-
+ 1 file changed, 91 insertions(+), 3 deletions(-)
+
+diff --git a/crates/luftlift-rs/src/server.rs b/crates/luftlift-rs/src/server.rs
+index e8c49f3..9cc9723 100644
+--- a/crates/luftlift-rs/src/server.rs
++++ b/crates/luftlift-rs/src/server.rs
+@@ -307,9 +307,8 @@ fn handle_tls_connection(
+         for f in &result.received_files {
+             info!(file = %f.name, bytes = f.bytes.len(), "received file");
+             if let Some(dir) = output_dir.as_ref() {
+-                let path = dir.join(&f.name);
+-                match std::fs::write(&path, &f.bytes) {
+-                    Ok(_) => info!(file = %f.name, path = %path.display(), "saved file"),
++                match save_received_file(dir, &f.name, &f.bytes) {
++                    Ok(path) => info!(file = %f.name, path = %path.display(), "saved file"),
+                     Err(e) => warn!(file = %f.name, error = %e, "failed to save file"),
+                 }
+             }
+@@ -476,6 +475,51 @@ pub fn dump_upload_dir() -> Option<PathBuf> {
+     }
+ }
+ 
++/// LilBitDrop: the last path component of a sender-supplied archive entry name,
++/// or `None` if nothing usable is left. Entry names come from whoever is
++/// sending (anyone nearby in "Everyone" mode), so `../x` or `/etc/x` must
++/// never reach `Path::join`. Pure (no I/O) so it's unit-testable.
++pub fn safe_file_name(name: &str) -> Option<&str> {
++    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
++    if base.is_empty() || base == "." || base == ".." || base.contains('\0') {
++        None
++    } else {
++        Some(base)
++    }
++}
++
++/// `stem-<n>.ext` for the n-th alternative name (`a.jpg` -> `a-1.jpg`,
++/// `._a.PNG` -> `._a-1.PNG`, `.profile` -> `.profile-1`).
++fn numbered_name(base: &str, n: u32) -> String {
++    match base.rfind('.') {
++        Some(i) if i > 0 => format!("{}-{}{}", &base[..i], n, &base[i..]),
++        _ => format!("{base}-{n}"),
++    }
++}
++
++/// LilBitDrop: write a received file into `dir` under its base name, never
++/// outside `dir` and never over an existing file (iOS reuses names such as
++/// `IMG_1582.jpg` on a re-send): a taken name becomes `name-1.ext`,
++/// `name-2.ext`, ... Returns the path written.
++pub fn save_received_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
++    let base = safe_file_name(name).ok_or_else(|| {
++        std::io::Error::new(std::io::ErrorKind::InvalidInput, "unusable file name")
++    })?;
++    for n in 0..10_000u32 {
++        let candidate = if n == 0 { base.to_string() } else { numbered_name(base, n) };
++        let path = dir.join(candidate);
++        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
++            Ok(mut file) => {
++                file.write_all(bytes)?;
++                return Ok(path);
++            }
++            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
++            Err(e) => return Err(e),
++        }
++    }
++    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "no free file name"))
++}
++
+ /// Sanitize a sender name for use in a filename: keep alphanumerics, dash,
+ /// underscore, dot; replace everything else (spaces, apostrophes in
+ /// "Andrew's MacBook Pro", etc.) with `_`. Pure (no I/O) so it's unit-testable.
+@@ -525,6 +569,50 @@ pub fn dump_raw_body(dir: &std::path::Path, kind: &str, sender: &str, body: &[u8
+     }
+ }
+ 
++#[cfg(test)]
++mod save_tests {
++    use super::*;
++
++    #[test]
++    fn safe_file_name_keeps_only_the_last_component() {
++        assert_eq!(safe_file_name("./IMG_1.jpg"), Some("IMG_1.jpg"));
++        assert_eq!(safe_file_name("../../etc/cron.d/x"), Some("x"));
++        assert_eq!(safe_file_name("/etc/passwd"), Some("passwd"));
++        assert_eq!(safe_file_name("a\\..\\b.txt"), Some("b.txt"));
++        assert_eq!(safe_file_name("._IMG.PNG"), Some("._IMG.PNG"));
++        assert_eq!(safe_file_name("dir/"), None);
++        assert_eq!(safe_file_name(".."), None);
++        assert_eq!(safe_file_name("x/.."), None);
++        assert_eq!(safe_file_name(""), None);
++    }
++
++    #[test]
++    fn numbered_name_inserts_before_extension() {
++        assert_eq!(numbered_name("a.jpg", 1), "a-1.jpg");
++        assert_eq!(numbered_name("._a.PNG", 2), "._a-2.PNG");
++        assert_eq!(numbered_name(".profile", 1), ".profile-1");
++        assert_eq!(numbered_name("noext", 3), "noext-3");
++    }
++
++    #[test]
++    fn save_received_file_never_overwrites_or_escapes() {
++        let root = std::env::temp_dir().join(format!("luftlift-save-{}", std::process::id()));
++        let dir = root.join("in");
++        std::fs::create_dir_all(&dir).unwrap();
++        let p0 = save_received_file(&dir, "./a.jpg", b"one").unwrap();
++        let p1 = save_received_file(&dir, "./a.jpg", b"two").unwrap();
++        let p2 = save_received_file(&dir, "../a.jpg", b"three").unwrap();
++        assert_eq!(p0, dir.join("a.jpg"));
++        assert_eq!(p1, dir.join("a-1.jpg"));
++        assert_eq!(p2, dir.join("a-2.jpg"));
++        assert_eq!(std::fs::read(&p0).unwrap(), b"one");
++        assert_eq!(std::fs::read(&p1).unwrap(), b"two");
++        assert!(!root.join("a.jpg").exists());
++        assert!(save_received_file(&dir, "..", b"x").is_err());
++        std::fs::remove_dir_all(&root).unwrap();
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-- 
+2.47.3
+
