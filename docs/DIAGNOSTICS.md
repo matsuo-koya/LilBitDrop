@@ -484,3 +484,11 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
 - Pi を Windows PC（USB-A）につないで起動。UDC は `not attached`（gadget は 18s に bind されたが列挙されず）、DHCP リースなし。**USB ネットワークは今回も不成立。**
 - その状態で AirDrop 受信は成功: 05:16:28.8 Ask → 05:16:33.9 保存（約5.1秒）、`FullSizeRender.jpg` 3,331,757 B、JPEG 5341×3170、iPhone Air / 27.2。
 - 電源: 起動10.8s から電圧不足、確認時点（起動8分）で21回、`throttled=0x50000`（過去に発生、確認時点では発生中でない）。
+
+### Windows での確認（10/10 05:49 頃起動、別の PC・別のケーブル）
+
+- 別の Windows PC（ホスト名 `N100Note`）と別のケーブルで接続。起動12.8s に列挙（high-speed、address 7）、**Windows は c.1（RNDIS）を選択**（`lbdrndis0` up、`lbdecm0` down）。
+- DHCP: `N100Note` に 10.55.0.44（vendor class `MSFT 5.0`、host MAC 02:42:…＝RNDIS 側）。
+- Web UI: 10.55.0.44 から `GET /` 200 が5秒ごと（自動更新）。`lbdrndis0` rx 487 / tx 422。ファイル取得（`/files/…`）のログはこの時点でなし。
+- 電源: 電圧不足4回、`throttled=0x50000`（確認時点で発生中ではない）。
+- 前回失敗（別 PC・別ケーブル）との差の切り分け（ケーブルか PC か）は未実施。
