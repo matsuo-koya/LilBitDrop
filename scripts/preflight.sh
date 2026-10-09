@@ -2,7 +2,7 @@
 set -euo pipefail
 source /etc/airbridge.conf
 
-echo "== AirBridge preflight =="
+echo "== LilBitDrop preflight =="
 echo "Wi-Fi interface: $WIFI_IFACE"
 echo "AWDL channel:    $AWDL_CHANNEL"
 echo

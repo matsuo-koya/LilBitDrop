@@ -2,7 +2,7 @@
 set -u
 source /etc/airbridge.conf
 
-echo "AirBridge status"
+echo "LilBitDrop status"
 echo "================"
 echo
 printf '%-22s %s\n' "Wi-Fi interface:" "$WIFI_IFACE"

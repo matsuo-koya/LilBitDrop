@@ -1,5 +1,5 @@
 [Unit]
-Description=AirBridge radio check (AWDL channel transmit-capable)
+Description=LilBitDrop radio check (AWDL channel transmit-capable)
 After=network-pre.target
 Before=airbridge-awdl.service
 

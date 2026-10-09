@@ -1,4 +1,4 @@
-# AirBridge v0.1 test plan
+# LilBitDrop v0.1 test plan
 
 ## Gate A — USB network
 
@@ -27,7 +27,7 @@ Pass criteria:
 
 Pass criteria:
 
-- AirBridge receiver appears in Apple's AirDrop picker when receiving from Everyone/Everyone for 10 Minutes mode.
+- LilBitDrop receiver appears in Apple's AirDrop picker when receiving from Everyone/Everyone for 10 Minutes mode.
 - A JPEG/HEIC/photo transfer finishes.
 - The file appears under `/var/lib/airbridge/incoming`.
 - The same file appears immediately in the browser inbox.

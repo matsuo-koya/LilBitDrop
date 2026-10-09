@@ -11,7 +11,7 @@ PREFIX=/opt/airbridge
 CONF=/etc/airbridge.conf
 DATA=/var/lib/airbridge/incoming
 UPSTREAM=https://github.com/ayourtch-llm/opendrop-rs.git
-# Upstream commit the AirBridge patches (patches/*.patch) were made against.
+# Upstream commit the LilBitDrop patches (patches/*.patch) were made against.
 UPSTREAM_BASE=dccc798
 BRANCH=airbridge/tlv-only
 
@@ -34,7 +34,7 @@ mkdir -p "$PREFIX" "$PREFIX/bin" "$DATA"
 if [[ ! -d "$PREFIX/opendrop-rs/.git" ]]; then
   git clone "$UPSTREAM" "$PREFIX/opendrop-rs"
 fi
-# Build upstream + the AirBridge patches (iOS 27 discovery TLVs, data-plane
+# Build upstream + the LilBitDrop patches (iOS 27 discovery TLVs, data-plane
 # grace, pinned-transfer ACK gating, dvzip stored blocks / trailer end). An
 # existing $BRANCH is left as is so local work is never overwritten.
 if ! git -C "$PREFIX/opendrop-rs" rev-parse --verify -q "$BRANCH" >/dev/null; then
@@ -93,7 +93,7 @@ systemctl enable airbridge-radio.service airbridge-awdl.service airbridge-receiv
   airbridge-usb.service airbridge-web.service
 
 echo
-printf '%s\n' 'AirBridge installed.'
+printf '%s\n' 'LilBitDrop installed.'
 printf '%s\n' "1) Edit $CONF and set WIFI_IFACE to the external AR9170 adapter."
 printf '%s\n' '2) Run: sudo /opt/airbridge/bin/preflight.sh'
 printf '%s\n' '3) Reboot, or: sudo systemctl start airbridge-receiver.service'

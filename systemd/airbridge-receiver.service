@@ -1,5 +1,5 @@
 [Unit]
-Description=AirBridge AirDrop receiver (luftlift)
+Description=LilBitDrop AirDrop receiver (luftlift)
 After=airbridge-awdl.service
 Requires=airbridge-awdl.service
 

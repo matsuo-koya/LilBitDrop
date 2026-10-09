@@ -1,5 +1,5 @@
 [Unit]
-Description=AirBridge file inbox web UI
+Description=LilBitDrop file inbox web UI
 After=airbridge-usb.service
 Wants=airbridge-usb.service
 

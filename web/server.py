@@ -41,7 +41,7 @@ def human_size(n):
         f/=1024
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AirBridge/0.1"
+    server_version = "LilBitDrop/0.1"
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -65,7 +65,7 @@ class Handler(BaseHTTPRequestHandler):
             st=p.stat(); q=urllib.parse.quote(p.name)
             rows.append(f'<div class="card"><div class="name"><a href="/files/{q}">{html.escape(p.name)}</a></div><div class="meta">{human_size(st.st_size)}</div></div>')
         if not rows: rows=['<div class="empty">No AirDrop files received yet.</div>']
-        body=f'''<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>AirBridge</title><style>{CSS}</style><h1>AirBridge</h1><p class="sub">AirDrop inbox <span class="pill">{len(files)} files</span></p>{''.join(rows)}'''
+        body=f'''<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>LilBitDrop</title><style>{CSS}</style><h1>LilBitDrop</h1><p class="sub">AirDrop inbox <span class="pill">{len(files)} files</span></p>{''.join(rows)}'''
         data=body.encode()
         self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Content-Length",str(len(data))); self.end_headers(); self.wfile.write(data)
 
@@ -98,5 +98,5 @@ class Server(ThreadingHTTPServer):
         super().server_bind()
 
 if __name__ == "__main__":
-    print(f"AirBridge web: http://{BIND}:{PORT}/ ; root={ROOT}")
+    print(f"LilBitDrop web: http://{BIND}:{PORT}/ ; root={ROOT}")
     Server((BIND,PORT),Handler).serve_forever()

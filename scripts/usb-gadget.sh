@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create the AirBridge USB Ethernet gadget (RNDIS) via configfs.
+# Create the LilBitDrop USB Ethernet gadget (RNDIS) via configfs.
 #
 # RNDIS + Microsoft OS descriptors lets Windows 10/11 bind its inbox RNDIS
 # driver with no manual install. Linux hosts use rndis_host. macOS has no
@@ -47,8 +47,8 @@ echo 0x02 >bDeviceClass # Communications
 
 mkdir -p strings/0x409
 echo "$SERIAL" >strings/0x409/serialnumber
-echo "AirBridge" >strings/0x409/manufacturer
-echo "AirBridge USB Network" >strings/0x409/product
+echo "LilBitDrop" >strings/0x409/manufacturer
+echo "LilBitDrop USB Network" >strings/0x409/product
 
 mkdir -p configs/c.1/strings/0x409
 echo "RNDIS" >configs/c.1/strings/0x409/configuration

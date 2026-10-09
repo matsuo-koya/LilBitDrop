@@ -1,8 +1,10 @@
-# AirBridge
+# LilBitDrop
 
 A Raspberry Pi proof-of-concept that receives files from Apple's AirDrop on Linux and exposes the received files to a connected PC over USB networking.
 
 > Status: **PoC / experimental**. This project depends on reverse-engineered AWDL/AirDrop implementations and is not affiliated with or endorsed by Apple.
+
+> Formerly *AirBridge*. Internal names (systemd units `airbridge-*`, `/opt/airbridge`, `/etc/airbridge.conf`, `/var/lib/airbridge`) keep the old name for now; the source comments in `patches/` still say "AirBridge".
 
 ## What v0.1 does
 
@@ -46,7 +48,7 @@ The exact hardware revision matters. Verify USB IDs; many product names were reu
           │
  /var/lib/airbridge/incoming
           │
-  tiny AirBridge web UI
+  tiny LilBitDrop web UI
           │ HTTP 10.55.0.1:8080
           ▼
  USB Ethernet gadget
@@ -71,7 +73,7 @@ ip link
 
 Find the external Wi-Fi interface name, usually something like `wlan1` or `wlx001122334455`.
 
-### 3. Install AirBridge
+### 3. Install LilBitDrop
 
 ```bash
 git clone <this-repository> airbridge
@@ -79,7 +81,7 @@ cd airbridge
 sudo ./scripts/install.sh
 ```
 
-The installer clones and builds upstream `opendrop-rs`, installs AirBridge scripts/services, and creates `/etc/airbridge.conf`.
+The installer clones and builds upstream `opendrop-rs`, installs LilBitDrop scripts/services, and creates `/etc/airbridge.conf`.
 
 ### 4. Configure the Wi-Fi interface
 

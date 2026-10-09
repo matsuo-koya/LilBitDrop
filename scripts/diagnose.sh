@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AirBridge read-only diagnostics snapshot.
+# LilBitDrop read-only diagnostics snapshot.
 # Never stops/starts services, kills processes, or touches wlan0/wlan1/awdl0 config.
 # Usage: scripts/diagnose.sh [OUTPUT_BASE_DIR]   (default: ~/airbridge-diagnostics)
 set -u
@@ -65,7 +65,7 @@ run system.txt lsusb
 ls -la "${INCOMING_DIR:-/var/lib/airbridge/incoming}" >"$OUT/incoming-ls.txt" 2>&1
 
 # --- summary ---
-echo "== AirBridge diagnose: $OUT"
+echo "== LilBitDrop diagnose: $OUT"
 cat "$OUT/processes.txt"
 for u in $UNITS; do printf '%-28s %s\n' "$u" "$(systemctl is-active $u)"; done
 echo "filin   /status: $(cat "$OUT/filin-status.json")"

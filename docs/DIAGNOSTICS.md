@@ -1,4 +1,4 @@
-# AirBridge 診断記録
+# LilBitDrop 診断記録
 
 観測事実・測定手順・仮説・再現ログを時系列で記録する。生データ（pcap、MAC入りログ）は
 リポジトリに入れず `~/airbridge-diagnostics/<timestamp>/` に置く。
@@ -410,3 +410,11 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
   ただし `usb0` の受信は0パケット、DHCP の要求もなし。電源の相手は未確認。
 - 電圧: 起動4秒後に `Undervoltage detected!`、08:32 時点で `throttled=0x50005`（電圧不足と速度低下が継続中）。
 - 未確認: 再起動後に Wi-Fi が自動でつながること。
+
+## 名称変更: AirBridge → LilBitDrop (10/9)
+
+- 同名の製品やプロジェクトが多い（AB180 の広告計測サービス Airbridge、App Store の iPhone↔Mac 転送アプリ、GitHub 上の AirPlay 関連など）ので、公開名を **LilBitDrop** に変更。
+- 変えたもの: README・ドキュメントの表記、共有シートに出る受信機名（`--name LilBitDrop`）、mDNS インスタンス（`LUFTLIFT_INSTANCE=lilbitdrop`）、
+  Web UI の見出し、USB gadget の製造元名・製品名、systemd の Description。
+- 変えていないもの: ユニット名 `airbridge-*`、`/opt/airbridge`、`/etc/airbridge.conf`、`/var/lib/airbridge`、config.txt の目印 `# AirBridge USB gadget`、
+  `patches/` 内のコメント。この節より前の記録は当時の名前のまま。
