@@ -389,8 +389,24 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
   MAC はボードのシリアルから決める（Pi 側 `02:41:…`、PC 側 `02:42:…`）ので、Windows 側でアダプタが毎回増えない。
 - `usb-network.sh`: `usb0` に 10.55.0.1/24 → dnsmasq で DHCP `10.55.0.10–50`。**ゲートウェイと DNS は配らない**ので、PC のインターネット接続に影響しない。
   NetworkManager には `conf.d/90-airbridge-usb.conf` で `usb0` を管理させない（rpi-usb-gadget の ICS は使わない）。
+  → **10/9 撤去**（下記「Wi-Fi 設定の消失」）。
 - `server.py`: `IP_FREEBIND` で `usb0` のアドレスが付く前でも 10.55.0.1 で待ち受けられる。一覧は5秒ごとに自動更新。
 - config.txt に `[all] dtoverlay=dwc2,dr_mode=peripheral` を追記（バックアップ `config.txt.pre-gadget`）。
 - 再起動なしでの確認（`dtoverlay dwc2 dr_mode=peripheral` を実行時に適用）: gadget が `fe980000.usb` に結び付き、`usb0` に 10.55.0.1、
   dnsmasq 起動、`curl http://10.55.0.1:8080/` で4ファイル表示、`IMG_1576.jpg` を 200 で 2,849,828 B 取得。`throttled=0x0`。
 - 未確認: Windows PC 側の認識、DHCP、ブラウザでの取得、PC 給電での電圧。
+
+### Wi-Fi 設定の消失と 10/9 朝の状態
+
+- 10/9 07:03 起動時、wlan0 に接続設定がなく Wi-Fi につながらなかった（ssh 不可）。起動約2分後にユーザーが手動で `<SSID>` を作り直した
+  （`/etc/NetworkManager/system-connections/<SSID>.nmconnection`、keyfile、自動接続あり）。
+- 原因: このイメージは Imager の cloud-init で、Wi-Fi／有線の設定は netplan（`/etc/netplan/90-NM-*.yaml`）にあった。
+  Gate F 導入時（10/8 13:21）の `nmcli general reload conf` の直後に、その2ファイルが **0 バイト**になっていた。
+  動作中の接続はメモリに残ったので当日は気づかず（12:16・13:04 の再起動テストは reload より前）。
+- 対処: `conf.d/90-airbridge-usb.conf` を撤去。NetworkManager は gadget を最初から管理しない
+  （`/usr/lib/udev/rules.d/85-nm-unmanaged.rules` の `DEVTYPE=="gadget"`、usb0 に `NM_UNMANAGED=1` を確認）ので不要だった。
+  `install.sh` は NM の設定に触れず、旧ファイルを消すだけ（reload しない）。空の netplan ファイル2つも削除。
+- 10/9 朝、Windows につないでいないのに USB-C 側のホストが gadget を列挙していた（起動から23秒後、address 8、`configured`）。
+  ただし `usb0` の受信は0パケット、DHCP の要求もなし。電源の相手は未確認。
+- 電圧: 起動4秒後に `Undervoltage detected!`、08:32 時点で `throttled=0x50005`（電圧不足と速度低下が継続中）。
+- 未確認: 再起動後に Wi-Fi が自動でつながること。
