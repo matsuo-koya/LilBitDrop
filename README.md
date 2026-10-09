@@ -194,6 +194,6 @@ A later revision can add a physical accept button, OLED status, per-transfer app
 
 ## Licenses
 
-AirBridge wrapper code in this repository is MIT unless otherwise noted.
+This repository is licensed under GPL-3.0-only (see `LICENSE`).
 
-`opendrop-rs` is a separate upstream GPL-3.0 project. This installer clones/builds it rather than vendoring its source. Review upstream licensing before redistribution of combined binaries/images.
+`opendrop-rs` is a separate upstream GPL-3.0-only project. This installer clones/builds it rather than vendoring its source. The files in `patches/` modify `opendrop-rs` and are distributed under the same GPL-3.0-only terms. Review upstream licensing before redistribution of combined binaries/images.
