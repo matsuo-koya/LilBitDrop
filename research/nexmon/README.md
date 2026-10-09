@@ -33,3 +33,11 @@ main の構成（外付けアダプタ）には手を入れない。
 - https://gitlab.com/kalilinux/packages/firmware-nexmon , https://gitlab.com/kalilinux/packages/brcmfmac-nexmon-dkms （kali/master, fff3190）
 - https://www.kali.org/blog/raspberry-pi-wi-fi-glow-up/
 - https://github.com/seemoo-lab/owl/blob/master/README.md , https://github.com/seemoo-lab/owl/issues/63
+
+## 手順2 準備（2026-10-09 21:04）
+
+- 方針: wlan0 を切り替えると Pi 上の Claude Code（API 通信が wlan0）が止まるため、以後は **Mac 上の Claude Code から USB 経由の SSH** で操作する（`HANDOFF.md`）。
+  Mac → `ssh koya@10.55.0.1` のログインはユーザーが確認済み。
+- `stage.sh` で `/opt/airbridge/research/nexmon/` に FW と ko を配置（**未有効化**）。元の状態は `orig/state.txt`（FW 7.45.265、alternatives = standard）。
+- `enable.sh` / `rollback.sh`: FW は update-alternatives で切り替え（パッケージ更新で勝手に戻らない）、ko は `/lib/modules/$KVER/updates/`。
+- CLM blob は Kali 版と同一（`cmp` 一致）なので差し替えない。
