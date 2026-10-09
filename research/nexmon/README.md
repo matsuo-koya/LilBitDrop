@@ -41,3 +41,41 @@ main の構成（外付けアダプタ）には手を入れない。
 - `stage.sh` で `/opt/airbridge/research/nexmon/` に FW と ko を配置（**未有効化**）。元の状態は `orig/state.txt`（FW 7.45.265、alternatives = standard）。
 - `enable.sh` / `rollback.sh`: FW は update-alternatives で切り替え（パッケージ更新で勝手に戻らない）、ko は `/lib/modules/$KVER/updates/`。
 - CLM blob は Kali 版と同一（`cmp` 一致）なので差し替えない。
+
+## 手順1–2 実施結果（2026-10-09、Mac から USB/SSH 経由）
+
+管理経路: Mac に鍵ペアを作成し `authorized_keys` へ登録（手順0 の鍵認証を確立）。以後 `ssh koya@10.55.0.1` で USB 経由操作。sudo パスワードなし確認済み。
+
+### 手順1: Nexmon 有効化 — **合格**
+
+`sudo enable.sh` 実行。SHA256SUMS 一致、staged ko の vermagic が稼働カーネル（`6.18.50+rpt-rpi-v8 SMP preempt mod_unload modversions aarch64`）と完全一致。
+
+| 判定項目 | 結果 |
+|---|---|
+| Nexmon FW ロード | ○ `7.45.206 (nexmon.org: 2.2.2-552-gb8c6-2) FWID 01-88ee44ea` |
+| brcmfmac | ○ `updates/brcmfmac.ko`（out-of-tree, `taints kernel` のみ） |
+| カーネル警告/oops | ○ なし。旧 phy 解放中に `brcmf_cfg80211_get_tx_power: error (-5)` と `reg_notifier: Country code iovar returned err = -5` が各1件出たが、これは旧ドライバ teardown 中の良性ノイズ（新ロード後の FW init はクリーン） |
+| wlan0 存在 | ○ 復活し SSID `Mazzotp` へ自動再接続（phy 番号は再読込ごとに振り直し） |
+| monitor モード追加 | ○ phy の Supported interface modes に `monitor` が出現（ベースラインには無かった） |
+
+### 手順2: 監視 IF — **不合格**（内蔵チップでは AWDL 不可の結論）
+
+| 基準 | 結果 |
+|---|---|
+| mon0 作成 | ○ `iw phy <phy> interface add mon0 type monitor` で作成・up 可 |
+| MAC 正常 | ✗ **`00:00:00:00:00:00`**。`ip link set mon0 address …` → `RTNETLINK: Operation not supported`（driver が MAC 変更を拒否）＝**OWL issue #63 が 6.18 でも再現** |
+| ch44/ch6 設定可 | ✗ `iw dev mon0 set channel` → **`Device or resource busy (-16)`**。FullMAC の単一無線を wlan0 の association（`Mazzotp`, ch48/80MHz）が占有し、副 vif はその ch48 に固定される |
+| filin で MAC 指定 | ✗ `filin --help` に MAC/addr/bssid オプションは**無い**（`-i/-c/-h/-N/--pcap/--park/-f/-M/--force-master/--no-force-master/--tx-retransmits/--check` のみ）。filin は監視 IF の MAC を読む設計のため全0 MAC は致命的 |
+| wlan0 自体を monitor 化（実 MAC 保持の代替経路） | ✗ `iw dev wlan0 set type monitor` → `Device busy`。`iw dev wlan0 disconnect` + `ip link set wlan0 down` 後も不可。NM 配下の `wpa_supplicant`（pid 763, `-u` D-Bus 制御）が wlan0 を掴み即再接続するため。これを外すには wpa_supplicant 停止が必要で「守ること」（NM に触れない）に抵触 → 不採用 |
+
+**結論**: 内蔵 BCM43455 + Nexmon(7.45.206)/brcmfmac(6.18移植) では、監視 IF の MAC が全0かつ変更不可（issue #63）で、filin に MAC 指定手段も無く、AWDL の送信元 MAC が成立しない。加えて FullMAC 単一無線のチャンネル占有で ch44/ch6 の制御もできない。**rtw88 と同じく内蔵は不可**。手順3–5（送信確認・同期精度・iPhone 試験）は前提を満たさず未実施。
+
+### 後片付け — 完了
+
+`sudo rollback.sh` 実行。stock FW `7.45.265` 復帰、brcmfmac 純正（`updates/` の ko 削除）、phy の monitor モード消失（ベースラインに戻る）、mon0 無し。本番サービス `airbridge-usb/receiver/awdl` すべて active、wlan1 監視 ch44 維持、wlan0 は `Mazzotp` 接続。システムは元の本番状態に復旧。
+
+### 残課題 / 次にやるなら
+
+- issue #63（全0 MAC）を回避するには、監視 vif に MAC を割り当てられる **nexmon 側のパッチ**か、filin に **MAC 明示オプション**を足す改修が要る。どちらも「機械的移植」を超える作業。
+- ch 占有は wlan0 を完全に非 associate にすれば解けるが、NM/wpa_supplicant を止める必要があり本番構成と両立しない。
+- 当面は外付け carl9170（wlan1）構成を正とする。
