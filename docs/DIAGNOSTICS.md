@@ -418,3 +418,20 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
   Web UI の見出し、USB gadget の製造元名・製品名、systemd の Description。
 - 変えていないもの: ユニット名 `airbridge-*`、`/opt/airbridge`、`/etc/airbridge.conf`、`/var/lib/airbridge`、config.txt の目印 `# AirBridge USB gadget`、
   `patches/` 内のコメント。この節より前の記録は当時の名前のまま。
+
+## 再起動テスト（10/9 11:16 起動）
+
+- Wi-Fi: 起動14秒で `<SSID>` に自動接続（keyfile の設定で。手操作なし）。**Wi-Fi 設定消失の対処は有効。**
+- USB: gadget の製造元名・製品名は `LilBitDrop` / `LilBitDrop USB Network`。Web UI の title も LilBitDrop。`throttled=0x0`、電圧不足は0回（今回の給電では問題なし）。
+- **receiver が起動しなかった**:
+  1. radio-setup の1回目の再読込（9.2s）後、インターフェースが戻った直後の確認でまだ `no IR` → 失敗（17.1s）。
+  2. awdl の `filin-guard` も `no IR` で失敗 → receiver は `Requires=` のため `Job ... failed with result 'dependency'` で終了し、以後誰も起動しない。
+  3. awdl は `Restart=always` で再試行 → `Wants=` で radio-setup が再実行され2回目の再読込（19.8s）→ 26.7s に送信可能、awdl は起動。
+- 危険の発見: radio-setup は awdl が再起動するたびに実行されるので、「1回だけ」は1プロセス内の話にすぎず、
+  `no IR` が直らなければ数秒ごとに再読込を繰り返す（10/8 に USB 列挙不能を起こした状況）。
+- 修正:
+  - radio-setup: 再読込回数を `/run/airbridge/radio-reloads` で起動ごとに数え、**最大2回**（今回、10秒間隔の2回は問題なく、2回目で直った）。
+    再読込後はインターフェースが戻ってからも最大20秒、`no IR` が消えるのを待つ。上限に達したら再読込せず「抜き差しして」と出して失敗。
+  - receiver: `Requires=` → `Wants=` + `PartOf=airbridge-awdl.service` + `StartLimitIntervalSec=0`。awdl の初回失敗で receiver が見捨てられない。
+  - 実機に反映し、receiver を手動起動。AWDL の告知は `instance: "lilbitdrop"`。
+- 未確認: 修正後の再起動、iPhone の共有シートに「LilBitDrop」と出るか。

@@ -1,7 +1,13 @@
 [Unit]
 Description=LilBitDrop AirDrop receiver (luftlift)
 After=airbridge-awdl.service
-Requires=airbridge-awdl.service
+# Wants, not Requires: if filin's first start fails at boot (radio not ready
+# yet) and systemd restarts it, Requires fails this job with 'dependency' and
+# nothing ever starts the receiver again. Without awdl0, luftlift just exits
+# and Restart= retries. PartOf keeps "restart awdl -> restart receiver".
+Wants=airbridge-awdl.service
+PartOf=airbridge-awdl.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
