@@ -1,0 +1,5 @@
+# Installed to /etc/udev/rules.d/. usb0 is the bridge airbridge-usb builds over
+# the gadget ports (lbdrndis0, lbdecm0), with its own address and dnsmasq.
+# The ports are DEVTYPE=gadget and already unmanaged (85-nm-unmanaged.rules);
+# the bridge is not, so mark it here. A udev property needs no NM reload.
+SUBSYSTEM=="net", ACTION=="add|change", KERNEL=="usb0", ENV{NM_UNMANAGED}="1"

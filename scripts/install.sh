@@ -74,17 +74,18 @@ for unit in airbridge-awdl airbridge-receiver; do
 done
 
 # USB gadget: the board's OTG port (Pi 4: USB-C) in device mode. airbridge-usb
-# creates the RNDIS gadget itself and serves DHCP on usb0. NetworkManager
-# already leaves gadget interfaces alone (85-nm-unmanaged.rules,
-# DEVTYPE=gadget), so its config is not touched: reloading NM config on a
-# cloud-init/netplan image emptied /etc/netplan/90-NM-*.yaml and the Wi-Fi
-# profile was gone at the next boot.
+# creates the RNDIS + ECM gadget itself, bridges it as usb0 and serves DHCP
+# there. NetworkManager is kept off usb0 with a udev property, never with NM
+# config: reloading NM config on a cloud-init/netplan image emptied
+# /etc/netplan/90-NM-*.yaml and the Wi-Fi profile was gone at the next boot.
 BOOTCFG=/boot/firmware/config.txt
 [[ -f "$BOOTCFG" ]] || BOOTCFG=/boot/config.txt
 if ! grep -q '^# AirBridge USB gadget' "$BOOTCFG"; then
   printf '\n# AirBridge USB gadget\n[all]\ndtoverlay=dwc2,dr_mode=peripheral\n' >>"$BOOTCFG"
   echo "Added dwc2 peripheral overlay to $BOOTCFG (reboot required)"
 fi
+install -m 0644 "$REPO_ROOT/config/90-lilbitdrop-usb.rules" /etc/udev/rules.d/
+udevadm control --reload
 # Left by earlier versions; removed without reloading NM.
 rm -f /etc/NetworkManager/conf.d/90-airbridge-usb.conf
 

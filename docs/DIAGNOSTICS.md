@@ -455,3 +455,17 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
   単体テスト3件を追加、luftlift のテスト全件 pass。実機に入れ替え（旧版 `/opt/airbridge/bin/luftlift.pre-0011`）。
 - Web UI: 先頭が `.` のファイル（AppleDouble `._*`）を一覧に出さない。
 - 14:14 同じ PNG を再送: Ask→Upload 完了 約4.8秒。**`…-1.PNG` として保存され、13:38 の元ファイルはそのまま**（内容は同一、`cmp` 一致）。`._…-1.PNG` も同様。Web UI は2枚とも表示し、`._*` は出ない。
+
+## Gate F 続き: Mac 対応（RNDIS + ECM） (14:30–)
+
+- 10/9 07:03 起動時に USB の先にいたのは **Mac**（ユーザー確認）。gadget は列挙された（`configured`）が受信0パケット。**macOS には RNDIS のドライバがない**ため。
+- 13:16 起動以降は Windows（PC の USB-A → Pi の USB-C、Pi の給電も同じケーブル）につないでいるが UDC は `not attached`（列挙されていない）。
+  充電専用ケーブル、または電力不足（USB-A は 500–900 mA、起動以降電圧不足が継続）を疑う。未解決。
+- `usb-gadget.sh`: 構成を2つにした。c.1 = RNDIS + MS OS 記述子（Windows）、c.2 = CDC-ECM（macOS・Linux）。ホストがドライバのある方を選ぶ。
+  それぞれの netdev（`lbdrndis0`、`lbdecm0`）をブリッジ `usb0` に入れ、10.55.0.1・dnsmasq・Web UI は従来どおり `usb0` で動く。
+  ブリッジは STP なし・forward_delay 0（既定 15 秒だと DHCP が遅れる）。MAC はボードのシリアルから（RNDIS 02:41/02:42、ECM 02:44/02:43）。
+  gadget の `ifname` は bind 前に `%d` を含むパターンしか受け付けない（固定名は EINVAL）。
+- NetworkManager: ポートは gadget なので最初から管理外。ブリッジは gadget ではないので、udev ルール `90-lilbitdrop-usb.rules` で `NM_UNMANAGED=1`
+  （NM の設定は触らない、reload もしない）。3つとも `unmanaged` を確認。
+- 実機で gadget を作り直し: c.1/c.2 とも作成、ブリッジに2ポート、`usb0` に 10.55.0.1、dnsmasq 起動、Web UI 200。
+- 未確認: Mac での ECM の選択・DHCP・ブラウザでの取得、再起動後の自動構成、Windows。

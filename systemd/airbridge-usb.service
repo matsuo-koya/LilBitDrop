@@ -1,5 +1,5 @@
 [Unit]
-Description=LilBitDrop USB network (RNDIS gadget + DHCP for the host PC)
+Description=LilBitDrop USB network (RNDIS/ECM gadget + DHCP for the host PC)
 After=network-pre.target NetworkManager.service
 Wants=network-pre.target
 
