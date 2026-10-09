@@ -489,6 +489,7 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
 
 - 別の Windows PC（ホスト名 `N100Note`）と別のケーブルで接続。起動12.8s に列挙（high-speed、address 7）、**Windows は c.1（RNDIS）を選択**（`lbdrndis0` up、`lbdecm0` down）。
 - DHCP: `N100Note` に 10.55.0.44（vendor class `MSFT 5.0`、host MAC 02:42:…＝RNDIS 側）。
-- Web UI: 10.55.0.44 から `GET /` 200 が5秒ごと（自動更新）。`lbdrndis0` rx 487 / tx 422。ファイル取得（`/files/…`）のログはこの時点でなし。
+- Web UI: 10.55.0.44 から `GET /` 200 が5秒ごと（自動更新）。05:55:08 `GET /files/IMG_1612.jpg` 200（**ダウンロード成功**、ユーザー確認）。
+- **Gate F は Windows でも達成。**
 - 電源: 電圧不足4回、`throttled=0x50000`（確認時点で発生中ではない）。
 - 前回失敗（別 PC・別ケーブル）との差の切り分け（ケーブルか PC か）は未実施。
