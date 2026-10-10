@@ -5,6 +5,7 @@ import os
 import pathlib
 import socket
 import sys
+import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -25,7 +26,8 @@ def load_conf(path):
 
 CFG = load_conf(CONF)
 ROOT = pathlib.Path(CFG.get("INCOMING_DIR", "/var/lib/airbridge/incoming")).resolve()
-BIND = CFG.get("WEB_BIND", "10.55.0.1")
+# One or more addresses, space- or comma-separated (USB link, Wi-Fi AP).
+BINDS = CFG.get("WEB_BIND", "10.55.0.1").replace(",", " ").split()
 PORT = int(CFG.get("WEB_PORT", "8080"))
 ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -95,11 +97,13 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt%args))
 
 class Server(ThreadingHTTPServer):
-    # Bind WEB_BIND even before airbridge-usb has put it on usb0.
+    # Bind WEB_BIND even before airbridge-usb/-ap have put it on usb0/uap0.
     def server_bind(self):
         self.socket.setsockopt(socket.SOL_IP, getattr(socket, "IP_FREEBIND", 15), 1)
         super().server_bind()
 
 if __name__ == "__main__":
-    print(f"LilBitDrop web: http://{BIND}:{PORT}/ ; root={ROOT}")
-    Server((BIND,PORT),Handler).serve_forever()
+    servers=[Server((b,PORT),Handler) for b in BINDS]
+    for b in BINDS: print(f"LilBitDrop web: http://{b}:{PORT}/ ; root={ROOT}")
+    for s in servers[1:]: threading.Thread(target=s.serve_forever,daemon=True).start()
+    servers[0].serve_forever()

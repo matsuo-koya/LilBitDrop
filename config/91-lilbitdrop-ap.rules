@@ -1,0 +1,4 @@
+# Installed to /etc/udev/rules.d/. uap0 is the access point airbridge-ap adds
+# on the built-in radio, with its own address, hostapd and dnsmasq. A udev
+# property needs no NM reload (never run `nmcli general reload conf`).
+SUBSYSTEM=="net", ACTION=="add|change", KERNEL=="uap0", ENV{NM_UNMANAGED}="1"

@@ -17,7 +17,7 @@ BRANCH=airbridge/tlv-only
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y git curl ca-certificates build-essential pkg-config python3 iw rfkill dnsmasq-base
+apt-get install -y git curl ca-certificates build-essential pkg-config python3 iw rfkill dnsmasq-base hostapd
 
 # Install Rust only when cargo is absent.
 if ! command -v cargo >/dev/null 2>&1; then
@@ -55,6 +55,7 @@ install -m 0755 "$REPO_ROOT/scripts/preflight.sh" "$PREFIX/bin/preflight.sh"
 install -m 0755 "$REPO_ROOT/scripts/status.sh" "$PREFIX/bin/status.sh"
 install -m 0755 "$REPO_ROOT/scripts/filin-guard.sh" "$PREFIX/bin/filin-guard.sh"
 install -m 0755 "$REPO_ROOT/scripts/radio-setup.sh" "$PREFIX/bin/radio-setup.sh"
+install -m 0755 "$REPO_ROOT/scripts/wifi-ap.sh" "$PREFIX/bin/wifi-ap.sh"
 install -m 0755 "$REPO_ROOT/web/server.py" "$PREFIX/bin/airbridge-web.py"
 
 if [[ ! -f "$CONF" ]]; then
@@ -68,6 +69,7 @@ install -m 0644 "$REPO_ROOT/systemd/airbridge-awdl.service" /etc/systemd/system/
 install -m 0644 "$REPO_ROOT/systemd/airbridge-receiver.service" /etc/systemd/system/
 install -m 0644 "$REPO_ROOT/systemd/airbridge-web.service" /etc/systemd/system/
 install -m 0644 "$REPO_ROOT/systemd/airbridge-radio.service" /etc/systemd/system/
+install -m 0644 "$REPO_ROOT/systemd/airbridge-ap.service" /etc/systemd/system/
 for unit in airbridge-awdl airbridge-receiver; do
   install -d "/etc/systemd/system/$unit.service.d"
   install -m 0644 "$REPO_ROOT/systemd/$unit.service.d/"*.conf "/etc/systemd/system/$unit.service.d/"
@@ -85,13 +87,14 @@ if ! grep -q '^# AirBridge USB gadget' "$BOOTCFG"; then
   echo "Added dwc2 peripheral overlay to $BOOTCFG (reboot required)"
 fi
 install -m 0644 "$REPO_ROOT/config/90-lilbitdrop-usb.rules" /etc/udev/rules.d/
+install -m 0644 "$REPO_ROOT/config/91-lilbitdrop-ap.rules" /etc/udev/rules.d/
 udevadm control --reload
 # Left by earlier versions; removed without reloading NM.
 rm -f /etc/NetworkManager/conf.d/90-airbridge-usb.conf
 
 systemctl daemon-reload
 systemctl enable airbridge-radio.service airbridge-awdl.service airbridge-receiver.service \
-  airbridge-usb.service airbridge-web.service
+  airbridge-usb.service airbridge-web.service airbridge-ap.service
 
 echo
 printf '%s\n' 'LilBitDrop installed.'

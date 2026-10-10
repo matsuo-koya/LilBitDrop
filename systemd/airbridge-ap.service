@@ -1,0 +1,15 @@
+[Unit]
+Description=LilBitDrop Wi-Fi access point (built-in radio, DHCP for phones)
+After=NetworkManager.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/airbridge/bin/wifi-ap.sh
+ExecStopPost=-/usr/sbin/iw dev ${AP_IFACE} del
+EnvironmentFile=/etc/airbridge.conf
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
