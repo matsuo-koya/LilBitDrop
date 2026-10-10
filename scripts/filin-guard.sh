@@ -18,7 +18,43 @@ if [ -n "$PIDS" ]; then
   exit 1
 fi
 
-PHY=$(iw dev "$WIFI_IFACE" info 2>/dev/null | awk '/wiphy/{print "phy"$2}')
+phy_of() { iw dev "$WIFI_IFACE" info 2>/dev/null | awk '/wiphy/{print "phy"$2}'; }
+
+# 3. When the adapter's firmware hangs, carl9170's own restart can fail and leave
+#    the USB interface unbound (2026-10-10 10:46: "no command feedback received",
+#    "firmware upload failed (-32)", probe error -115). The device stays on the bus,
+#    and binding it to the driver again brings $WIFI_IFACE back without a replug.
+#    At most one attempt per REBIND_INTERVAL seconds, as this runs every 2 s.
+DRIVER=${WIFI_DRIVER:-carl9170}
+REBIND_INTERVAL=60
+REBIND_STAMP=/run/airbridge/rebind-last
+rebind_adapter() {
+  local d now last bound=
+  now=$(date +%s)
+  last=$(cat "$REBIND_STAMP" 2>/dev/null || echo 0)
+  [ $((now - last)) -ge "$REBIND_INTERVAL" ] || return 1
+  mkdir -p "${REBIND_STAMP%/*}"
+  echo "$now" >"$REBIND_STAMP"
+  [ -d "/sys/bus/usb/drivers/$DRIVER" ] || modprobe "$DRIVER"
+  for d in /sys/bus/usb/devices/*:*; do
+    [ -e "$d/driver" ] && continue
+    modprobe -R "$(cat "$d/modalias")" 2>/dev/null | grep -qx "$DRIVER" || continue
+    echo "filin-guard: $WIFI_IFACE not present; binding unbound ${d##*/} to $DRIVER" >&2
+    echo "${d##*/}" >"/sys/bus/usb/drivers/$DRIVER/bind" && bound=1
+  done
+  [ -n "$bound" ] || return 1
+  for _ in $(seq 1 15); do
+    [ -n "$(phy_of)" ] && return 0
+    sleep 1
+  done
+  return 1
+}
+
+PHY=$(phy_of)
+if [ -z "$PHY" ] && rebind_adapter; then
+  PHY=$(phy_of)
+  echo "filin-guard: $WIFI_IFACE is back on $PHY after rebind" >&2
+fi
 if [ -z "$PHY" ]; then
   echo "filin-guard: $WIFI_IFACE not present" >&2
   exit 1

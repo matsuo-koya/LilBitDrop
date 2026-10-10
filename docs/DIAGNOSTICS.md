@@ -493,3 +493,13 @@ filin のバージョン別（`/opt/airbridge/bin/filin.*` に保存）:
 - **Gate F は Windows でも達成。**
 - 電源: 電圧不足4回、`throttled=0x50000`（確認時点で発生中ではない）。
 - 前回失敗（別 PC・別ケーブル）との差の切り分け（ケーブルか PC か）は未実施。
+
+### 10/10 10:46 ドングル停止と自動復旧（`filin-guard`）
+
+- 05:48 起動（Windows `N100Note` 接続）。06:30:56 USB 接続が切断（PC のスリープと思われる）、09:32 に一瞬再接続。08:27–09:59 に `channel change 2412 -> 5220 failed` が散発。
+- **10:46:44 AR9170 のファームウェアが無応答**（`no command feedback received (-110)`）→ ドライバの再起動も失敗（`firmware upload failed (-32)`、probe `-115`）。
+  USB 上にデバイスは残るが、インターフェース `1-1.4:1.0` がドライバから外れたまま。`airbridge-awdl` は `wlan1 not present` で2秒ごとに失敗（11:52 時点で1,747回）。この間は受信不可。
+- 10:46 前後に USB-C 側のイベントはない。PC スリープ中の給電低下による電圧不足が間接要因の可能性はあるが（`throttled=0x50000`）、発生時刻が記録されず未確認。
+- 11:53 `echo 1-1.4:1.0 > /sys/bus/usb/drivers/carl9170/bind` だけで `wlan1` が復帰（抜き差し不要）。AWDL・受信とも active。
+- 対策: `filin-guard.sh` が `wlan1` 不在のとき、ドライバ未割り当ての対応 USB インターフェースを `carl9170` に bind し直す（60秒に1回まで、`/run/airbridge/rebind-last`）。
+- 確認 11:55:55: 手動で unbind → 11:55:58 guard が bind → 11:56:00 `wlan1`（phy5）復帰・filin 起動。**約4秒で自動復旧。**
